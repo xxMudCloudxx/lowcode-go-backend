@@ -1,6 +1,7 @@
 package lab5
 
 import (
+	"sync"
 	"time"
 )
 
@@ -25,8 +26,22 @@ import (
 //
 // 参考: https://gobyexample-cn.github.io/select
 func Merge(channels ...<-chan int) <-chan int {
-	// 在这里编写你的代码...
-	return nil
+	outCh := make(chan int)
+	var wg sync.WaitGroup
+	for _, ch := range channels {
+		wg.Add(1)
+		go func(c <-chan int) {
+			defer wg.Done()
+			for v := range c {
+				outCh <- v
+			}
+		}(ch)
+	}
+	go func() {
+		wg.Wait()
+		close(outCh)
+	}()
+	return outCh
 }
 
 // ============================================================
@@ -48,7 +63,12 @@ func Merge(channels ...<-chan int) <-chan int {
 // 参考: https://gobyexample-cn.github.io/timeouts
 func WithTimeout(ch <-chan int, timeout time.Duration) (int, bool) {
 	// 在这里编写你的代码...
-	return 0, false
+	select {
+	case value := <- ch:
+		return value, true;
+	case <-time.After(timeout):
+		return 0, false
+	}
 }
 
 // ============================================================
@@ -65,13 +85,13 @@ func WithTimeout(ch <-chan int, timeout time.Duration) (int, bool) {
 func TrySend(ch chan<- int, value int) bool {
 	// 在这里编写你的代码...
 	// 提示:
-	// select {
-	// case ch <- value:
-	//     return true
-	// default:
-	//     return false
-	// }
-	return false
+	select {
+	case ch <- value:
+	    return true
+	default:
+	    return false
+	}
+
 }
 
 // TryReceive 非阻塞接收
@@ -81,7 +101,12 @@ func TrySend(ch chan<- int, value int) bool {
 // 如果通道为空或无缓冲且无发送者，立即返回 (0, false)
 func TryReceive(ch <-chan int) (int, bool) {
 	// 在这里编写你的代码...
-	return 0, false
+	select {
+	case value := <-ch:
+		return value, true
+	default:
+		return 0, false
+	}
 }
 
 // ============================================================
@@ -100,7 +125,14 @@ func TryReceive(ch <-chan int) (int, bool) {
 // 提示: 复用 TrySend 函数
 func Broadcast(message int, channels ...chan<- int) int {
 	// 在这里编写你的代码...
-	return 0
+	count := 0
+	for _, cn := range channels {
+		canSend := TrySend(cn, message)
+		if canSend {
+			count++
+		}
+	}
+	return count
 }
 
 // ============================================================
@@ -120,5 +152,10 @@ func Broadcast(message int, channels ...chan<- int) int {
 // 参考: https://gobyexample-cn.github.io/range-over-channels
 func Drain(ch <-chan int) []int {
 	// 在这里编写你的代码...
-	return nil
+	result := []int{}
+	for val := range ch {
+		result = append(result, val)
+	}
+	
+	return result
 }

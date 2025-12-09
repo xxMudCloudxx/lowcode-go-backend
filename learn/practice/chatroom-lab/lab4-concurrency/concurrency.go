@@ -23,7 +23,16 @@ import (
 // 参考: https://gobyexample-cn.github.io/waitgroups
 func RunAsync(tasks ...func()) {
 	// 在这里编写你的代码...
-	
+	var wg sync.WaitGroup;
+	for _, task := range tasks {
+		wg.Add(1)
+		go func() { 
+			defer wg.Done()
+			task()
+		}()
+	}
+	wg.Wait()
+
 	// 提示: 使用 var wg sync.WaitGroup
 }
 
@@ -46,7 +55,14 @@ func RunAsync(tasks ...func()) {
 // 参考: https://gobyexample-cn.github.io/channel-directions
 func Generator(nums ...int) <-chan int {
 	// 在这里编写你的代码...
-	return nil
+	ch := make(chan int)
+	go func() {
+		for _, num := range nums {
+			ch <- num;
+		}
+		close(ch)
+	}()
+	return ch
 }
 
 // ============================================================
@@ -74,7 +90,31 @@ func Generator(nums ...int) <-chan int {
 // 参考: https://gobyexample-cn.github.io/channel-synchronization
 func PingPong(count int) []string {
 	// 在这里编写你的代码...
-	return nil
+	 pingCh := make(chan string)
+	 pongCh := make(chan string)
+	 resCh := make(chan string, 2*count)
+
+	 go func() {
+		for i := 0; i < count; i++ {
+			pingCh <- "ping"
+			resCh <- "ping"
+			<-pongCh
+		}
+	}()
+
+	go func() {
+		for i := 0; i < count; i ++ {
+			<-pingCh
+			resCh <- "pong"
+			pongCh <- "pong"
+		}
+	}()
+
+	result := make([]string, 0, 2*count)
+	for i := 0; i < 2*count; i++ {
+		result = append(result, <-resCh)
+	}
+	return result
 }
 
 // ============================================================
@@ -90,7 +130,7 @@ func PingPong(count int) []string {
 // 参考: https://gobyexample-cn.github.io/channel-buffering
 func CreateTaskQueue(bufferSize int) chan func() {
 	// 在这里编写你的代码...
-	return nil
+	return make(chan func(), bufferSize)
 }
 
 // ProcessQueue 处理任务队列
@@ -105,6 +145,11 @@ func CreateTaskQueue(bufferSize int) chan func() {
 // 参考: https://gobyexample-cn.github.io/range-over-channels
 func ProcessQueue(queue chan func()) {
 	// 在这里编写你的代码...
+	for task := range queue {
+		if task != nil {
+			task()
+		}
+	}
 }
 
 // --- 辅助类型（不要修改）---

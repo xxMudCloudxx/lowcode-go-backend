@@ -20,23 +20,21 @@ type Counter struct {
 //
 // 参考: https://gobyexample-cn.github.io/atomic-counters
 func (c *Counter) Inc() {
-	// 在这里编写你的代码...
-	// 提示: atomic.AddInt64(&c.value, 1)
+	atomic.AddInt64(&c.value, 1)
 }
 
 // Add 原子加 n
 //
 // TODO: Task 1b - 使用 atomic.AddInt64
 func (c *Counter) Add(n int64) {
-	// 在这里编写你的代码...
+	atomic.AddInt64(&c.value, n)
 }
 
 // Value 原子读取当前值
 //
 // TODO: Task 1c - 使用 atomic.LoadInt64
 func (c *Counter) Value() int64 {
-	// 在这里编写你的代码...
-	return 0
+	return atomic.LoadInt64(&c.value)
 }
 
 // ============================================================
@@ -70,7 +68,9 @@ func NewSafeMap() *SafeMap {
 //
 // 参考: https://gobyexample-cn.github.io/mutexes
 func (m *SafeMap) Set(key string, value interface{}) {
-	// 在这里编写你的代码...
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[key] = value
 }
 
 // Get 获取值（需要读锁）
@@ -79,23 +79,28 @@ func (m *SafeMap) Set(key string, value interface{}) {
 //
 // 读锁允许多个协程同时读取
 func (m *SafeMap) Get(key string) (interface{}, bool) {
-	// 在这里编写你的代码...
-	return nil, false
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	val, ok := m.data[key]
+	return val, ok
 }
 
 // Delete 删除键（需要写锁）
 //
 // TODO: Task 2c - 使用写锁保护删除操作
 func (m *SafeMap) Delete(key string) {
-	// 在这里编写你的代码...
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data, key)
 }
 
 // Len 返回长度（需要读锁）
 //
 // TODO: Task 2d - 使用读锁保护
 func (m *SafeMap) Len() int {
-	// 在这里编写你的代码...
-	return 0
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.data)
 }
 
 // ============================================================
@@ -129,22 +134,24 @@ func NewWorkerPool(workers, queueSize int) *WorkerPool {
 //
 // 参考: https://gobyexample-cn.github.io/worker-pools
 func (p *WorkerPool) Start() {
-	// 在这里编写你的代码...
-	// 提示:
-	// for i := 0; i < p.workers; i++ {
-	//     p.wg.Add(1)
-	//     go func() {
-	//         defer p.wg.Done()
-	//         for job := range p.jobs { ... }
-	//     }()
-	// }
+	for i := 0; i < p.workers; i++ {
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			for job := range p.jobs {
+				if job != nil {
+					job()
+				}
+			}
+		}()
+	}
 }
 
 // Submit 提交任务到工作池
 //
 // TODO: Task 3b - 将任务发送到 jobs 通道
 func (p *WorkerPool) Submit(job func()) {
-	// 在这里编写你的代码...
+	p.jobs <- job
 }
 
 // Stop 关闭工作池并等待完成
@@ -155,7 +162,8 @@ func (p *WorkerPool) Submit(job func()) {
 //   1. 关闭 jobs 通道: close(p.jobs)
 //   2. 等待所有工人完成: p.wg.Wait()
 func (p *WorkerPool) Stop() {
-	// 在这里编写你的代码...
+	close(p.jobs)
+	p.wg.Wait()
 }
 
 // ============================================================
@@ -188,8 +196,15 @@ func NewRateLimiter(maxTokens int64) *RateLimiter {
 // 提示: 使用 atomic.AddInt64 返回值判断
 // 或使用 atomic.CompareAndSwapInt64 实现
 func (r *RateLimiter) Allow() bool {
-	// 在这里编写你的代码...
-	return false
+	for {
+		current := atomic.LoadInt64(&r.tokens)
+		if current <= 0 {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(&r.tokens, current, current-1) {
+			return true
+		}
+	}
 }
 
 // Refill 补充一个令牌
@@ -198,7 +213,15 @@ func (r *RateLimiter) Allow() bool {
 //
 // 提示: 使用循环 + CompareAndSwap 实现原子操作
 func (r *RateLimiter) Refill() {
-	// 在这里编写你的代码...
+	for {
+		current := atomic.LoadInt64(&r.tokens)
+		if current >= r.maxTokens {
+			return
+		}
+		if atomic.CompareAndSwapInt64(&r.tokens, current, current+1) {
+			return
+		}
+	}
 }
 
 // Tokens 返回当前令牌数

@@ -63,6 +63,10 @@ func NewMessageHistory(maxSize int) *MessageHistory {
 // 参考: https://gobyexample-cn.github.io/slices
 func (h *MessageHistory) Add(msg *Message) {
 	// 在这里编写你的代码...
+	h.messages = append(h.messages, msg)
+	if (len(h.messages) > h.maxSize) {
+		h.messages = h.messages[1:]
+	}
 }
 
 // GetRecent 获取最近 n 条消息
@@ -81,7 +85,14 @@ func (h *MessageHistory) Add(msg *Message) {
 // 参考: https://gobyexample-cn.github.io/slices
 func (h *MessageHistory) GetRecent(n int) []*Message {
 	// 在这里编写你的代码...
-	return nil
+	if (n > h.Len()) {
+		return h.messages;
+	}
+	if (n <= 0) {
+		return h.messages[:0]
+	}
+
+	return h.messages[h.Len() - n:]
 }
 
 // Len 返回消息数量
@@ -96,6 +107,7 @@ func (h *MessageHistory) Len() int {
 // 提示: 重新赋值一个空切片，或使用 slice[:0]
 func (h *MessageHistory) Clear() {
 	// 在这里编写你的代码...
+	h.messages = h.messages[:0]
 }
 
 // ============================================================
@@ -137,6 +149,16 @@ func NewUserRegistry() *UserRegistry {
 // 参考: https://gobyexample-cn.github.io/maps
 func (r *UserRegistry) Register(id, username string) error {
 	// 在这里编写你的代码...
+	_, exists := r.users[id];
+	if (exists) {
+		return ErrUserExists
+	}
+	newUseer := User{
+		ID: id,
+		Username: username,
+		JoinTime: time.Now(),
+	}
+	r.users[id] = &newUseer
 	return nil
 }
 
@@ -151,6 +173,11 @@ func (r *UserRegistry) Register(id, username string) error {
 // 提示: 使用 delete(map, key)
 func (r *UserRegistry) Unregister(id string) error {
 	// 在这里编写你的代码...
+		_, exists := r.users[id];
+	if (!exists) {
+		return ErrUserNotFound
+	}
+	delete(r.users, id)
 	return nil
 }
 
@@ -165,7 +192,12 @@ func (r *UserRegistry) Unregister(id string) error {
 // 提示: value, exists := map[key]
 func (r *UserRegistry) GetUser(id string) (*User, bool) {
 	// 在这里编写你的代码...
-	return nil, false
+	_, exists := r.users[id]
+	if (!exists) {
+		return nil, false
+	}
+	user := r.users[id]
+	return user, true
 }
 
 // Count 返回用户总数
@@ -173,7 +205,7 @@ func (r *UserRegistry) GetUser(id string) (*User, bool) {
 // TODO: Task 2d - 返回 Map 长度
 func (r *UserRegistry) Count() int {
 	// 在这里编写你的代码...
-	return 0
+	return len(r.users)
 }
 
 // GetUsernames 获取所有用户名
@@ -187,7 +219,12 @@ func (r *UserRegistry) Count() int {
 // 参考: https://gobyexample-cn.github.io/range
 func (r *UserRegistry) GetUsernames() []string {
 	// 在这里编写你的代码...
-	return nil
+	result := []string{}
+
+	for _, user:= range r.users {
+		result = append(result, user.Username)
+	}
+	return result
 }
 
 // ============================================================
@@ -207,6 +244,12 @@ func (r *UserRegistry) GetUsernames() []string {
 //
 // 参考: https://gobyexample-cn.github.io/range
 func FilterMessages(messages []*Message, msgType MessageType) []*Message {
-	// 在这里编写你的代码...
-	return nil
+	// 在这里编写你的代码..
+	result := []*Message{}
+	for _, user := range messages {
+		if user.Type == msgType {
+			result = append(result, user)
+		}
+	}
+	return result
 }

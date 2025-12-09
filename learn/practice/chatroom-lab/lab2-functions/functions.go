@@ -2,6 +2,7 @@ package lab2
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -72,7 +73,17 @@ func (m *Message) Format() string {
 // 参考: https://gobyexample-cn.github.io/multiple-return-values
 func ParseCommand(input string) (cmd string, args string, err error) {
 	// 在这里编写你的代码...
-	return "", "", nil
+	if input == ""  {
+		return "", "", ErrEmptyInput
+	} else if strings.TrimPrefix(input, "/") == input {
+		return "", "", ErrNotCommand
+	}
+	parts := strings.SplitN(strings.TrimPrefix(input, "/"), " ", 2)
+	cmd = parts[0]
+	if len(parts) > 1 {
+		args = parts[1]
+	}
+	return cmd, args, nil
 }
 
 // ValidateUsername 验证用户名是否合法
@@ -89,6 +100,15 @@ func ParseCommand(input string) (cmd string, args string, err error) {
 // 参考: https://gobyexample-cn.github.io/errors
 func ValidateUsername(name string) error {
 	// 在这里编写你的代码...
+	if (strings.Contains(name, " ")) {
+		return ErrNameHasSpace
+	}
+	if (len(name) < 2) { 
+		return ErrNameTooShort;
+	}
+	if (len(name) > 20) {
+		return ErrNameTooLong;
+	}
 	return nil
 }
 
@@ -111,8 +131,12 @@ func ValidateUsername(name string) error {
 //
 // 参考: https://gobyexample-cn.github.io/variadic-functions
 func FormatMessages(prefix string, messages ...*Message) []string {
-	// 在这里编写你的代码...
-	return nil
+	result := []string{}
+
+	for _, message := range messages {
+		result = append(result, prefix + message.Format())
+	}
+	return result
 }
 
 // CreateCounter 创建一个计数器闭包
@@ -135,7 +159,11 @@ func FormatMessages(prefix string, messages ...*Message) []string {
 // 参考: https://gobyexample-cn.github.io/closures
 func CreateCounter(start int) func() int {
 	// 在这里编写你的代码...
-	return nil
+	i := start
+	return func() int {
+		i++;
+		return i;
+	}
 }
 
 // Fibonacci 计算第 n 个斐波那契数
@@ -149,6 +177,11 @@ func CreateCounter(start int) func() int {
 //
 // 参考: https://gobyexample-cn.github.io/recursion
 func Fibonacci(n int) int {
-	// 在这里编写你的代码...
-	return 0
+	if (n <= 0) {
+		return 0;
+	}
+	if (n == 1) {
+		return 1
+	}
+	return Fibonacci(n - 1) + Fibonacci(n - 2)
 }

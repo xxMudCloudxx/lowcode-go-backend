@@ -1,6 +1,9 @@
 package lab1
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // MessageType 表示消息的类型
 // 这是一个自定义类型，底层是 int
@@ -17,7 +20,10 @@ type MessageType int
 //
 // 在下方编写你的代码:
 const (
-	// 在这里定义常量...
+	MsgJoin MessageType = iota
+	MsgLeave
+	MsgChat
+	MsgSystem
 )
 
 // String 返回 MessageType 的可读名称
@@ -33,7 +39,18 @@ const (
 // 参考: https://gobyexample-cn.github.io/switch
 func (t MessageType) String() string {
 	// 在这里编写你的代码...
-	return ""
+	switch t {
+	case MsgJoin:
+		return "JOIN"
+	case MsgLeave:
+		return "LEAVE"
+	case MsgChat:
+		return "CHAT"
+	case MsgSystem:
+		return "SYSTEM"
+	default:
+		return "UNKNOWN"
+	}
 }
 
 // Message 表示一条聊天消息
@@ -58,7 +75,9 @@ type Message struct {
 // 参考: https://gobyexample-cn.github.io/pointers
 func NewMessage(msgType MessageType, username, content string) *Message {
 	// 在这里编写你的代码...
-	return nil
+	message := Message{Type: msgType, Username: username, Content: content, Timestamp: time.Now()}
+
+	return &message
 }
 
 // Format 返回格式化的消息字符串
@@ -73,5 +92,16 @@ func NewMessage(msgType MessageType, username, content string) *Message {
 // 参考: https://gobyexample-cn.github.io/methods
 func (m *Message) Format() string {
 	// 在这里编写你的代码...
-	return ""
+	switch m.Type {
+	case MsgJoin:
+		return fmt.Sprintf(">> %s joined", m.Username)
+	case MsgLeave:
+		return fmt.Sprintf("<< %s left", m.Username)
+	case MsgChat:
+		return fmt.Sprintf("%s: %s", m.Username, m.Content)
+	case MsgSystem:
+		return fmt.Sprintf("[System] %s", m.Content)
+	default:
+		return ""
+	}
 }
