@@ -43,8 +43,7 @@ interface Component {
 
 ### 1.2 Go 后端数据结构定义 (v3.0 重写)
 
-> [!CAUTION]
-> **v2.0 的致命问题**
+> [!CAUTION] > **v2.0 的致命问题**
 >
 > 使用 `map[string]interface{}` 存储 Props/Styles 会导致：
 >
@@ -64,24 +63,23 @@ import (
 )
 
 // Component 对应前端的 Component interface
-// ⚠️ 关键变化：使用 json.RawMessage 存储 Props 和 Styles
+// ✅ v3.1 更新：ID 使用 int64 (前端使用时间戳作为 ID，root=1，其他为时间戳如 1765279327172)
+// ✅ Props/Styles 使用 json.RawMessage，Go 不解析内部结构
 type Component struct {
-    ID       int             `json:"id"`
+    ID       int64           `json:"id"`           // 时间戳 ID
     Name     string          `json:"name"`
     Desc     string          `json:"desc"`
-    ParentID *int            `json:"parentId,omitempty"`
-    Children []int           `json:"children,omitempty"`
-
-    // ✅ json.RawMessage: Go 不解析内部结构，直接当字节数组存取
-    // 性能好 + 完美支持任意嵌套结构
-    Props  json.RawMessage `json:"props,omitempty"`
-    Styles json.RawMessage `json:"styles,omitempty"`
+    ParentID *int64          `json:"parentId,omitempty"`
+    Children []int64         `json:"children,omitempty"`
+    Props    json.RawMessage `json:"props,omitempty"`
+    Styles   json.RawMessage `json:"styles,omitempty"`
 }
 
 // PageSchema 对应前端的完整页面快照
+// ✅ Components 的 key 是字符串形式的 ID (如 "1", "1765279327172")
 type PageSchema struct {
-    RootID     int                  `json:"rootId"`
-    Components map[string]Component `json:"components"`
+    RootID     int64                 `json:"rootId"`      // root=1
+    Components map[string]Component `json:"components"`  // key 为字符串 ID
 }
 
 // Page 数据库模型（GORM）
@@ -95,8 +93,7 @@ type Page struct {
 }
 ```
 
-> [!TIP]
-> **json.RawMessage 的优势**
+> [!TIP] > **json.RawMessage 的优势**
 >
 > ```go
 > // 前端传来的 Props 可能是任意结构
@@ -111,8 +108,7 @@ type Page struct {
 
 ## 二、后端 Patch 应用逻辑 (v3.0 新增)
 
-> [!IMPORTANT]
-> **v2.0 的致命遗漏：新用户加入问题**
+> [!IMPORTANT] > **v2.0 的致命遗漏：新用户加入问题**
 >
 > 用户 A 和 B 已经产生了 500 个 Patch，此时用户 C 加入房间：
 >
@@ -132,11 +128,17 @@ go get github.com/evanphx/json-patch/v5
 import jsonpatch "github.com/evanphx/json-patch/v5"
 
 // 原始 JSON (内存中的最新状态)
-original := []byte(`{"components":{"1":{"id":1,"name":"Page","props":{"title":"Hello"}}}}`)
+original := []byte(`{
+  "rootId": 1,
+  "components": {
+    "1": {"id":1,"name":"Page","props":{},"children":[1765279327172]},
+    "1765279327172": {"id":1765279327172,"name":"Button","props":{"type":"primary","text":"按钮"},"parentId":1}
+  }
+}`)
 
-// 前端发来的 Patch (RFC 6902 格式)
+// 前端发来的 Patch (RFC 6902 格式) - 修改按钮描述
 patchBytes := []byte(`[
-    {"op":"replace","path":"/components/1/props/title","value":"World"}
+    {"op":"replace","path":"/components/1765279327172/desc","value":"我的按钮"}
 ]`)
 
 // 解析并应用 Patch
@@ -146,10 +148,28 @@ modified, err := patch.Apply(original)
 // modified = `{"components":{"1":{"id":1,"name":"Page","props":{"title":"World"}}}}`
 ```
 
+> [!TIP] > **实际 Patch 示例 (来自前端测试)**
+>
+> ```json
+> // 修改 Props (整体替换)
+> {"op":"replace","path":"/components/1765279327172/props","value":{"type":"primary","text":"新按钮"}}
+>
+> // 修改样式
+> {"op":"replace","path":"/components/1765279327172/styles","value":{"width":"300px"}}
+>
+> // 添加组件
+> {"op":"add","path":"/components/1765279429014","value":{"id":1765279429014,"name":"Button",...}}
+>
+> // 删除组件
+> {"op":"remove","path":"/components/1765279429014"}
+>
+> // 添加事件
+> {"op":"replace","path":"/components/1765279593601/props","value":{"onClick":{"actions":[...]}}}
+> ```
+
 ### 2.2 Room 结构体：维护实时状态
 
-> [!CAUTION]
-> **生产环境警告 #1：数据持久化的"真空期"风险**
+> [!CAUTION] > **生产环境警告 #1：数据持久化的"真空期"风险**
 >
 > 当前逻辑是"房间没人时才保存到数据库"。如果有人挂机不关浏览器，数据就一直只在内存里。
 >
@@ -423,8 +443,7 @@ type UserInfo struct {
 
 ### 3.2 Hub 房间管理器 (v3.0 重写)
 
-> [!WARNING]
-> **生产环境警告 #2：Hub 的单点压力**
+> [!WARNING] > **生产环境警告 #2：Hub 的单点压力**
 >
 > 当前 Hub 是单 Goroutine 处理所有 `register/unregister/broadcast` 事件。
 >
@@ -706,8 +725,7 @@ func (c *Client) sendError(message string) {
 
 ## 四、安全的 WebSocket 鉴权 (v3.0 新增)
 
-> [!CAUTION]
-> **v2.0 的安全漏洞**
+> [!CAUTION] > **v2.0 的安全漏洞**
 >
 > ```
 > ws://host/ws/:pageId?userId=abc&token=xxx
