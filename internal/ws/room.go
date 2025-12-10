@@ -83,9 +83,12 @@ func (r *Room) flushToDB(reason string) {
 	}
 
 	r.mu.Lock()
-	r.lastPersistedVersion = version
+	// 防止版本回退：只有本次刷盘版本大于已持久化版本时才更新
+	if version > r.lastPersistedVersion {
+		r.lastPersistedVersion = version
+		log.Printf("[Room %s] ✅ %s刷盘, 版本: %d", r.ID, reason, version)
+	}
 	r.mu.Unlock()
-	log.Printf("[Room %s] ✅ %s刷盘, 版本: %d", r.ID, reason, version)
 }
 
 // Stop 停止定时刷盘 (房间销毁时调用)

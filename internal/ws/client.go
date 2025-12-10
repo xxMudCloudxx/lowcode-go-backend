@@ -51,9 +51,8 @@ func (c *Client) ReadPump() {
 		switch msg.Type {
 		case TypeOpPatch:
 			c.handleOpPatch(message)
-			// TODO：设计好后取消注释
-			// case TypeCursorMove:
-			// 	c.handleCursorMove(message)
+		case TypeCursorMove:
+			c.handleCursorMove(message)
 		}
 	}
 }
@@ -95,22 +94,19 @@ func (c *Client) handleOpPatch(message []byte) {
 		return
 	}
 
-	// 3. 广播给房间内其他人
-	c.Hub.Broadcast(c.RoomID, message, c)
+	// 3. 广播给房间内其他人（Patch 是关键消息，阻塞时断开连接）
+	c.Hub.Broadcast(c.RoomID, message, c, true)
 
 	log.Printf("[Client] ✅ 用户 [%s] Patch 已应用，新版本: %d",
 		c.UserInfo.UserName, room.Version)
 }
 
-// TODP: 需要重新设计
 // handleCursorMove 处理光标移动消息
-// 光标移动不需要服务器处理，直接广播给房间内其他用户
-// func (c *Client) handleCursorMove(message []byte) {
-// 	// 直接广播给房间内其他人（不包括自己）
-// 	c.Hub.Broadcast(c.RoomID, message, c)
-
-// 	log.Printf("[Client] 光标移动: 用户 [%s] 在房间 [%s]", c.UserInfo.UserName, c.RoomID)
-// }
+// 光标是非关键消息（Ephemeral），阻塞时静默跳过
+func (c *Client) handleCursorMove(message []byte) {
+	// 广播给房间内其他人（非关键消息，阻塞时跳过）
+	c.Hub.Broadcast(c.RoomID, message, c, false)
+}
 
 // sendError 发送结构化错误消息
 // code: 错误码（前端用于判断逻辑分支）

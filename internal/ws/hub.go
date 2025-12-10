@@ -9,9 +9,10 @@ import (
 
 // BroadcastMessage 广播消息结构
 type BroadcastMessage struct {
-	RoomID  string
-	Message []byte
-	Sender  *Client
+	RoomID     string
+	Message    []byte
+	Sender     *Client
+	IsCritical bool // 关键消息（如 Patch）阻塞时断开连接；非关键消息（如光标）阻塞时跳过
 }
 
 // Hub 维护所有活跃房间和客户端连接
@@ -171,8 +172,10 @@ func (h *Hub) handleBroadcast(msg *BroadcastMessage) {
 		return
 	}
 
+	// 收集需要断开的客户端（关键消息阻塞时）
+	var clientsToKick []*Client
+
 	room.mu.RLock()
-	defer room.mu.RUnlock()
 	for client := range room.Clients {
 		if msg.Sender != nil && client == msg.Sender {
 			continue
@@ -180,19 +183,32 @@ func (h *Hub) handleBroadcast(msg *BroadcastMessage) {
 
 		select {
 		case client.send <- msg.Message:
+			// 发送成功
 		default:
-			// ✅ 遇到阻塞只记录日志，不要 delete 也不要 close
-			// 让 WritePump 感知错误后触发 unregister 统一处理
-			log.Printf("[Hub] ⚠️ 客户端 [%s] 发送缓冲区已满，跳过广播", client.UserInfo.UserName)
+			if msg.IsCritical {
+				// 关键消息阻塞：必须断开连接，触发重连和全量同步
+				log.Printf("[Hub] ⚠️ 关键消息发送失败，断开客户端 [%s]", client.UserInfo.UserName)
+				clientsToKick = append(clientsToKick, client)
+			} else {
+				// 非关键消息阻塞：静默跳过（如光标移动）
+			}
 		}
+	}
+	room.mu.RUnlock()
+
+	// 在锁外处理断开连接，避免死锁
+	for _, client := range clientsToKick {
+		h.unregister <- client
 	}
 }
 
 // Broadcast 外部调用接口
-func (h *Hub) Broadcast(roomID string, message []byte, sender *Client) {
+// isCritical: true=关键消息（阻塞时断开连接）, false=非关键消息（阻塞时跳过）
+func (h *Hub) Broadcast(roomID string, message []byte, sender *Client, isCritical bool) {
 	h.broadcast <- &BroadcastMessage{
-		RoomID:  roomID,
-		Message: message,
-		Sender:  sender,
+		RoomID:     roomID,
+		Message:    message,
+		Sender:     sender,
+		IsCritical: isCritical,
 	}
 }
