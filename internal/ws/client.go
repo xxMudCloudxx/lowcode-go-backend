@@ -10,6 +10,21 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// ========== 心跳配置 ==========
+const (
+	// pongWait 允许等待 Pong 的最大时间
+	pongWait = 60 * time.Second
+
+	// pingPeriod 发送 Ping 的间隔 (必须小于 pongWait)
+	pingPeriod = (pongWait * 9) / 10
+
+	// writeWait 写消息的超时时间
+	writeWait = 10 * time.Second
+
+	// maxMessageSize 最大消息大小 (防止恶意攻击)
+	maxMessageSize = 512 * 1024 // 512KB
+)
+
 type Client struct {
 	Hub      *Hub
 	Conn     *websocket.Conn
@@ -29,22 +44,77 @@ func NewClient(hub *Hub, conn *websocket.Conn, roomID string, userInfo UserInfo)
 	}
 }
 
+// WritePump 负责写消息和发送心跳 Ping
 func (c *Client) WritePump() {
-	for message := range c.send {
-		// 把消息写入 WebSocket 发给前端
-		c.Conn.WriteMessage(websocket.TextMessage, message)
+	ticker := time.NewTicker(pingPeriod)
+
+	defer func() {
+		ticker.Stop()
+		c.Conn.Close()
+	}()
+
+	for {
+		select {
+		case message, ok := <-c.send:
+			// 设置写超时
+			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+
+			if !ok {
+				// send channel 已关闭，发送关闭帧
+				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+
+			// 写入消息
+			if err := c.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				return
+			}
+
+		case <-ticker.C:
+			// 定时发送 Ping（保活）
+			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return // Ping 发送失败，连接已断
+			}
+		}
 	}
 }
 
+// ReadPump 负责读消息和处理心跳 Pong
 func (c *Client) ReadPump() {
+	defer func() {
+		// 读循环退出 = 连接断开，通知 Room 注销
+		if c.Room != nil {
+			c.Room.Unregister(c)
+		}
+		c.Conn.Close()
+	}()
+
+	// 设置最大消息大小（防止恶意攻击）
+	c.Conn.SetReadLimit(maxMessageSize)
+
+	// 设置初始读超时
+	c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	// 设置 Pong 处理函数：每次收到 Pong 就重置读超时
+	c.Conn.SetPongHandler(func(string) error {
+		c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
 	for {
-		// 阻塞等待前端发消息
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
-			break // 连接断开
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("[Client] ⚠️ 连接异常关闭: %v", err)
+			}
+			break
 		}
 
-		// 根据消息类型处理
+		// 收到消息也重置读超时（客户端活跃）
+		c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+
+		// 解析消息类型
 		var msg WSMessage
 		json.Unmarshal(message, &msg)
 
@@ -96,7 +166,6 @@ func (c *Client) handleOpPatch(message []byte) {
 	// 3. 广播给房间内其他人（Patch 是关键消息，阻塞时断开连接）
 	// 直接找 Room 广播，不经过 Hub，实现去中心化
 	c.Room.Broadcast(message, c, true)
-
 	log.Printf("[Client] ✅ 用户 [%s] Patch 已应用，新版本: %d",
 		c.UserInfo.UserName, c.Room.Version)
 }
