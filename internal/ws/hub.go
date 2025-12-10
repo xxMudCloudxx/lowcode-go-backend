@@ -171,6 +171,8 @@ func (h *Hub) handleBroadcast(msg *BroadcastMessage) {
 		return
 	}
 
+	room.mu.RLock()
+	defer room.mu.RUnlock()
 	for client := range room.Clients {
 		if msg.Sender != nil && client == msg.Sender {
 			continue
