@@ -5,7 +5,6 @@ import (
 	"lowercode-go-server/domain/repository"
 	"lowercode-go-server/internal/ws"
 
-	jsonpatch "github.com/evanphx/json-patch/v5"
 	"gorm.io/datatypes"
 )
 
@@ -63,16 +62,6 @@ func (uc *PageUseCase) CreatePage(pageID, creatorID string) (*entity.Page, error
 		return nil, err
 	}
 	return page, nil
-}
-
-// ApplyPatch 应用 JSON Patch 到当前状态
-// 使用 RFC 6902 标准的 json-patch 库
-func (uc *PageUseCase) ApplyPatch(currentState, patchBytes []byte) ([]byte, error) {
-	patch, err := jsonpatch.DecodePatch(patchBytes)
-	if err != nil {
-		return nil, err
-	}
-	return patch.Apply(currentState)
 }
 
 // SavePage 直接保存页面（非协同编辑场景）

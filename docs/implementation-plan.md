@@ -878,3 +878,135 @@ graph TB
 - [Focalboard Server](https://github.com/mattermost/focalboard/tree/main/server)
 - [json-patch](https://github.com/evanphx/json-patch)
 - [Clerk Go SDK](https://clerk.com/docs/references/go/overview)
+
+更详细的架构图：
+
+```mermaid
+graph TB
+    %% ================= 样式定义 =================
+    classDef infra fill:#f9f9f9,stroke:#333,stroke-width:2px,color:black
+    classDef logic fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:black
+    classDef actor fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:black
+    classDef db fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,stroke-dasharray: 5 5,color:black
+    classDef ext fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:black
+
+    %% ================= 外部层 =================
+    subgraph External ["🌐 External Network"]
+        User([User / Browser]):::ext
+        Clerk([Clerk Auth Service]):::ext
+        LB["Nginx / Ingress (K8s)<br/>Sticky Session: hash($pageId)"]:::infra
+    end
+
+    %% ================= 核心服务层 =================
+    subgraph Server ["📦 LowCode Go Backend (Single Pod)"]
+        
+        %% --- 接口层 ---
+        subgraph Interface ["🔌 Interface Layer (Adapters)"]
+            Router["Gin Router"]:::infra
+            
+            subgraph Middleware
+                Auth["ClerkAuth Middleware"]:::infra
+            end
+
+            HTTP_Ctrl["Page Controller<br/>(HTTP)"]:::logic
+            WS_Hdl["WS Handler<br/>(Upgrade HTTP->WS)"]:::logic
+            WebHook["Webhook Controller"]:::logic
+        end
+
+        %% --- 业务编排层 ---
+        subgraph UseCase ["🧠 UseCase Layer (Business Rules)"]
+            PageUC["PageUseCase"]:::logic
+            
+            %% 逻辑决策点
+            arbiter{{"❓ Has Room?<br/>(Memory Check)"}}:::logic
+        end
+
+        %% --- 协同引擎 (最复杂的部分) ---
+        subgraph RealTime ["⚡ Real-time Engine (Actor Model)"]
+            Hub["Hub (Global Manager)<br/>map[pageID]*Room"]:::actor
+            
+            subgraph RoomActor ["Room (Goroutine)"]
+                State["Page Schema (RAM)<br/>Version: N"]:::actor
+                PatchEngine["JSON-Patch Apply"]
+                Broadcaster(("Broadcast<br/>Channel"))
+                SaveTicker(("Save Ticker<br/>(5s)"))
+            end
+
+            Client["Client (Goroutine)<br/>Read/Write Pump"]:::actor
+        end
+
+        %% --- 领域与持久化 ---
+        subgraph DomainRepo ["🛡️ Domain & Repository"]
+            RepoInt["«Interface»<br/>PageRepository"]:::infra
+            RepoImpl["Repository Impl<br/>(GORM)"]:::infra
+        end
+    end
+
+    %% ================= 数据库层 =================
+    DB[("🐘 PostgreSQL<br/>(JSONB Storage)")]:::db
+
+    %% ================= 连线关系 =================
+
+    %% 1. 流量入口
+    User --> LB
+    LB -- "HTTP GET /pages/:id" --> Router
+    LB -- "WS /ws?pageId=xyz" --> Router
+    Clerk -- "User Sync" --> WebHook
+
+    Router --> Auth
+    Auth --> HTTP_Ctrl
+    Auth --> WS_Hdl
+    WebHook -- "Sync User" --> RepoImpl
+
+    %% 2. HTTP 读路径 (修复观察者效应)
+    HTTP_Ctrl --> PageUC
+    PageUC -- "1. Try Read Memory" --> arbiter
+    arbiter -- "✅ Yes (Hit)" --> Hub
+    Hub -. "Read Only" .-> State
+    arbiter -- "❌ No (Miss)" --> RepoInt
+    RepoInt --> RepoImpl
+    RepoImpl -- "SELECT" --> DB
+
+    %% 3. WS 写路径 (协同编辑)
+    WS_Hdl -- "1. Connect" --> Hub
+    Hub -- "2. GetOrCreate (Pre-check DB)" --> RepoInt
+    Hub -- "3. Spawn/Join" --> RoomActor
+    Hub -- "4. Register" --> Client
+    
+    Client -- "Op-Patch" --> PatchEngine
+    PatchEngine -- "Update State" --> State
+    PatchEngine -- "Notify" --> Broadcaster
+    Broadcaster -- "Push" --> Client
+
+    %% 4. 持久化路径 (异步落库)
+    SaveTicker -- "Tick" --> RepoImpl
+    RepoImpl -- "UPDATE ... WHERE ver=N<br/>(Optimistic Lock)" --> DB
+
+    %% 样式应用
+    linkStyle default stroke-width:2px,fill:none,stroke:#333
+```
+
+```mermaid
+graph TD
+    subgraph "HTTP World"
+        C[Controller] --> U[PageUseCase]
+    end
+
+    subgraph "WebSocket World"
+        H[Hub] --> R[Room]
+    end
+
+    subgraph "Persistence Layer"
+        Repo[PageRepository]
+    end
+
+    %% HTTP Path
+    U -- "1. Read/Write Meta" --> Repo
+
+    %% WebSocket Path
+    R -- "2. Sync State (via PageService)" --> Repo
+
+    %% The Interaction
+    U -. "3. Read Memory" .-> H
+```
+
