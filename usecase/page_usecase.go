@@ -43,6 +43,7 @@ func (uc *PageUseCase) GetPage(pageID string) (*entity.Page, error) {
 
 // CreatePage 创建新页面
 // ⚠️ 使用强类型的 NewDefaultSchema，避免硬编码 JSON 字符串
+// ⚠️ 使用 Create 而非 Save，防止意外覆盖已存在的页面
 func (uc *PageUseCase) CreatePage(pageID, creatorID string) (*entity.Page, error) {
 	// 使用工厂方法创建默认 Schema（类型安全）
 	defaultSchema := entity.NewDefaultSchema()
@@ -58,13 +59,13 @@ func (uc *PageUseCase) CreatePage(pageID, creatorID string) (*entity.Page, error
 		CreatorID: creatorID,
 	}
 
-	if err := uc.repo.Save(page); err != nil {
+	// ✅ 使用 Create 而非 Save，只能创建新记录
+	if err := uc.repo.Create(page); err != nil {
 		return nil, err
 	}
 	return page, nil
 }
 
-// SavePage 直接保存页面（非协同编辑场景）
-func (uc *PageUseCase) SavePage(page *entity.Page) error {
-	return uc.repo.Save(page)
-}
+// ⚠️ SavePage 方法已删除
+// 在协同编辑系统中，禁止使用全量 Save，它会覆盖 schema 和 version
+// 如需更新元数据（标题、描述），应使用专门的 UpdateMeta 方法

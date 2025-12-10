@@ -25,7 +25,10 @@ type PageService interface {
 	GetPageState(pageID string) ([]byte, int64, error)
 	// PageExists 检查页面是否存在
 	PageExists(pageID string) (bool, error)
-	SavePageState(pageID string, state []byte, version int64) error
+	// SavePageState 保存页面状态（支持版本跳跃）
+	// oldVersion: 上次持久化的版本（用于乐观锁检查）
+	// newVersion: 当前内存中的版本（要写入 DB）
+	SavePageState(pageID string, state []byte, oldVersion, newVersion int64) error
 }
 
 // NewHub 创建 Hub 实例
@@ -123,6 +126,7 @@ func (h *Hub) GetOrCreateRoom(roomID string) (*Room, error) {
 	// 创建房间
 	room = NewRoom(roomID, state, h.pageService, h)
 	room.Version = version
+	room.lastPersistedVersion = version
 	h.rooms[roomID] = room
 
 	log.Printf("[Hub] 🏠 创建房间 %s，版本: %d", roomID, version)

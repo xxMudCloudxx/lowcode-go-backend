@@ -33,20 +33,23 @@ func (r *pageRepository) GetByPageID(pageID string) (*entity.Page, error) {
 	return &page, err
 }
 
-// Save 创建或更新整个页面实体
-func (r *pageRepository) Save(page *entity.Page) error {
-	return r.db.Save(page).Error
+// Create 创建新页面（仅用于首次创建）
+// ⚠️ 禁止使用 GORM Save，它会覆盖 schema 和 version
+func (r *pageRepository) Create(page *entity.Page) error {
+	return r.db.Create(page).Error
 }
 
 // UpdateSchema 只更新 Schema 字段（协同编辑热路径）
-// 实现乐观锁：只有当数据库中的 version == oldVersion 时才更新
-func (r *pageRepository) UpdateSchema(pageID string, schema []byte, oldVersion int64) error {
+// ✅ 支持版本跳跃：内存中可能积累了多个版本，一次性刷盘
+// oldVersion: 上次持久化的版本号（用于 WHERE 条件）
+// newVersion: 要写入的新版本号（允许跳跃）
+func (r *pageRepository) UpdateSchema(pageID string, schema []byte, oldVersion, newVersion int64) error {
 	result := r.db.Model(&entity.Page{}).
-		// ⚠️ 关键：WHERE 必须包含版本检查，实现乐观锁
+		// ⚠️ 关键：WHERE 使用 oldVersion（上次持久化的版本）
 		Where("page_id = ? AND version = ?", pageID, oldVersion).
 		Updates(map[string]interface{}{
 			"schema":  string(schema),
-			"version": oldVersion + 1, // 版本号递增
+			"version": newVersion, //  写入新版本（允许跳跃）
 		})
 
 	if result.Error != nil {
@@ -89,6 +92,11 @@ func (r *pageRepository) PageExists(pageID string) (bool, error) {
 }
 
 // SavePageState 保存页面状态（供 Hub 使用）
-func (r *pageRepository) SavePageState(pageID string, state []byte, version int64) error {
-	return r.UpdateSchema(pageID, state, version)
+//
+//	支持版本跳跃
+//
+// oldVersion: 上次持久化的版本（用于乐观锁检查）
+// newVersion: 当前内存中的版本（要写入 DB）
+func (r *pageRepository) SavePageState(pageID string, state []byte, oldVersion, newVersion int64) error {
+	return r.UpdateSchema(pageID, state, oldVersion, newVersion)
 }

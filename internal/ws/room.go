@@ -298,18 +298,19 @@ func (r *Room) flushToDB(reason string) {
 
 	snapshot := make([]byte, len(r.CurrentState))
 	copy(snapshot, r.CurrentState)
-	version := r.Version
+	currentVersion := r.Version
+	lastVersion := r.lastPersistedVersion
 	r.stateMu.RUnlock()
 
-	if err := r.pageService.SavePageState(r.ID, snapshot, version); err != nil {
+	if err := r.pageService.SavePageState(r.ID, snapshot, lastVersion, currentVersion); err != nil {
 		log.Printf("[Room %s] ⚠️ %s刷盘失败: %v", r.ID, reason, err)
 		return
 	}
 
 	r.stateMu.Lock()
-	if version > r.lastPersistedVersion {
-		r.lastPersistedVersion = version
-		log.Printf("[Room %s] ✅ %s刷盘, 版本: %d", r.ID, reason, version)
+	if currentVersion > r.lastPersistedVersion {
+		r.lastPersistedVersion = currentVersion
+		log.Printf("[Room %s] ✅ %s刷盘, 版本: %d → %d", r.ID, reason, lastVersion, currentVersion)
 	}
 	r.stateMu.Unlock()
 }
