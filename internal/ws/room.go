@@ -26,7 +26,12 @@ type Room struct {
 	broadcast  chan *RoomBroadcast // 广播消息
 	register   chan *Client        // 加入请求
 	unregister chan *Client        // 退出请求
-	stopChan   chan struct{}       // 停止信号
+	stopChan   chan struct{}       // 停止信号（由 Hub 发送）
+
+	// 状态标志
+	stopping    bool         // 是否正在停止
+	clientCount int          // 客户端计数（供 Hub 双重检查）
+	countMu     sync.RWMutex // 保护 clientCount 和 stopping
 
 	// 状态锁 - 只用于保护 CurrentState/Version 的并发读写
 	stateMu sync.RWMutex
@@ -36,7 +41,7 @@ type Room struct {
 	flushTicker          *time.Ticker
 	pageService          PageService
 
-	// 反向引用：房间销毁时通知 Hub
+	// 反向引用：通知 Hub
 	hub *Hub
 }
 
@@ -80,10 +85,6 @@ func (r *Room) run() {
 	defer func() {
 		r.flushTicker.Stop()
 		r.flushToDB("销毁前")
-		// 通知 Hub 销毁房间
-		if r.hub != nil {
-			r.hub.destroyRoom <- r
-		}
 		log.Printf("[Room %s] 🛑 事件循环已停止", r.ID)
 	}()
 
@@ -93,6 +94,7 @@ func (r *Room) run() {
 		case client := <-r.register:
 			r.clients[client] = true
 			client.Room = r
+			r.updateClientCount(1)
 			r.sendSyncToClient(client)
 			log.Printf("[Room %s] 👋 用户 [%s] 加入，当前人数: %d",
 				r.ID, client.UserInfo.UserName, len(r.clients))
@@ -102,12 +104,13 @@ func (r *Room) run() {
 			if _, ok := r.clients[client]; ok {
 				delete(r.clients, client)
 				close(client.send)
+				r.updateClientCount(-1)
 				log.Printf("[Room %s] 👋 用户 [%s] 离开，剩余人数: %d",
 					r.ID, client.UserInfo.UserName, len(r.clients))
 
-				// 房间空了，退出循环触发销毁
-				if len(r.clients) == 0 {
-					return
+				// 房间空了，通知 Hub 请求销毁（不立即退出，等 Hub 确认）
+				if len(r.clients) == 0 && r.hub != nil {
+					r.hub.NotifyIdle(r)
 				}
 			}
 
@@ -179,14 +182,26 @@ func (r *Room) sendSyncToClient(client *Client) {
 
 // ========== 对外暴露的接口 ==========
 
-// Register 注册客户端到房间
-func (r *Room) Register(client *Client) {
-	r.register <- client
+// ErrRoomClosed 房间已关闭错误
+var ErrRoomClosed = fmt.Errorf("room is closing")
+
+// Register 注册客户端到房间（非阻塞，防止向已死房间注册）
+func (r *Room) Register(client *Client) error {
+	select {
+	case r.register <- client:
+		return nil // 注册成功
+	case <-r.stopChan:
+		return ErrRoomClosed // 房间已关闭
+	}
 }
 
-// Unregister 注销客户端
+// Unregister 注销客户端（非阻塞）
 func (r *Room) Unregister(client *Client) {
-	r.unregister <- client
+	select {
+	case r.unregister <- client:
+	case <-r.stopChan:
+		// 房间已关闭，不需要注销
+	}
 }
 
 // Broadcast 广播消息
@@ -200,7 +215,31 @@ func (r *Room) Broadcast(message []byte, sender *Client, isCritical bool) {
 
 // Stop 停止房间（由 Hub 调用）
 func (r *Room) Stop() {
+	r.countMu.Lock()
+	r.stopping = true
+	r.countMu.Unlock()
 	close(r.stopChan)
+}
+
+// ClientCount 返回当前客户端数量（供 Hub 双重检查）
+func (r *Room) ClientCount() int {
+	r.countMu.RLock()
+	defer r.countMu.RUnlock()
+	return r.clientCount
+}
+
+// IsStopping 返回房间是否正在停止
+func (r *Room) IsStopping() bool {
+	r.countMu.RLock()
+	defer r.countMu.RUnlock()
+	return r.stopping
+}
+
+// updateClientCount 更新客户端计数（供 run() 内部调用）
+func (r *Room) updateClientCount(delta int) {
+	r.countMu.Lock()
+	r.clientCount += delta
+	r.countMu.Unlock()
 }
 
 // ========== 需要锁保护的状态操作 ==========
