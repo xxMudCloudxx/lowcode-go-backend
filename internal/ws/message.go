@@ -58,3 +58,25 @@ type ErrorPayload struct {
 	Code    ErrorCode `json:"code"`    // 错误码（前端用于判断逻辑）
 	Message string    `json:"message"` // 错误描述（用于调试/日志，可本地化）
 }
+
+// ========== 自定义错误类型 ==========
+// 使用类型断言判断错误，而非字符串匹配
+
+// VersionConflictError 版本冲突错误
+type VersionConflictError struct {
+	CurrentVersion  int64
+	ExpectedVersion int64
+}
+
+func (e *VersionConflictError) Error() string {
+	return "version conflict"
+}
+
+// PatchError Patch 处理错误（解析或应用失败）
+type PatchError struct {
+	Reason string
+}
+
+func (e *PatchError) Error() string {
+	return e.Reason
+}

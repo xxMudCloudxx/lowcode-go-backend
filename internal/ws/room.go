@@ -20,8 +20,7 @@ type Room struct {
 	LastActive   time.Time
 
 	// 定时刷盘机制
-	lastPersistedVersion int64         // 上次持久化的版本
-	dirtyPatchCount      int           // 脏数据计数器
+	lastPersistedVersion int64         // 上次持久化的版本（脏数据量 = Version - lastPersistedVersion）
 	flushTicker          *time.Ticker  // 定时刷盘
 	stopFlush            chan struct{} // 停止信号
 	pageService          PageService   // 数据库服务
@@ -85,7 +84,6 @@ func (r *Room) flushToDB(reason string) {
 
 	r.mu.Lock()
 	r.lastPersistedVersion = version
-	r.dirtyPatchCount = 0
 	r.mu.Unlock()
 	log.Printf("[Room %s] ✅ %s刷盘, 版本: %d", r.ID, reason, version)
 }
@@ -97,27 +95,35 @@ func (r *Room) Stop() {
 }
 
 // ApplyPatch 应用 Patch 并更新内存状态
-func (r *Room) ApplyPatch(patchBytes []byte) error {
+// expectedVersion: 客户端声称的版本号，必须在锁内校验以避免 TOCTOU 竞态
+func (r *Room) ApplyPatch(patchBytes []byte, expectedVersion int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// 在锁内检查版本，解决 TOCTOU 竞态条件
+	if r.Version != expectedVersion {
+		return &VersionConflictError{
+			CurrentVersion:  r.Version,
+			ExpectedVersion: expectedVersion,
+		}
+	}
+
 	patch, err := jsonpatch.DecodePatch(patchBytes)
 	if err != nil {
-		return fmt.Errorf("patch 解析失败: %w", err)
+		return &PatchError{Reason: fmt.Sprintf("patch 解析失败: %v", err)}
 	}
 
 	modified, err := patch.Apply(r.CurrentState)
 	if err != nil {
-		return fmt.Errorf("patch 应用失败: %w", err)
+		return &PatchError{Reason: fmt.Sprintf("patch 应用失败: %v", err)}
 	}
 
 	r.CurrentState = modified
 	r.Version++
 	r.LastActive = time.Now()
-	r.dirtyPatchCount++
 
-	// 超过阈值立即触发异步刷盘
-	if r.dirtyPatchCount >= FlushThreshold {
+	// ✅ 用版本差值判断是否需要刷盘，避免 dirtyPatchCount 重置 bug
+	if r.Version-r.lastPersistedVersion >= FlushThreshold {
 		go r.flushToDB("阈值触发")
 	}
 

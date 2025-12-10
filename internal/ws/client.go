@@ -2,6 +2,8 @@ package ws
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -56,7 +58,7 @@ func (c *Client) ReadPump() {
 	}
 }
 
-// TODO：重新设计
+// handleOpPatch 处理 op-patch 消息
 func (c *Client) handleOpPatch(message []byte) {
 	var wsMsg WSMessage
 	json.Unmarshal(message, &wsMsg)
@@ -70,24 +72,30 @@ func (c *Client) handleOpPatch(message []byte) {
 	// 1. 获取房间
 	room := c.Hub.GetRoom(c.RoomID)
 	if room == nil {
+		c.sendError(ErrRoomNotFound, c.RoomID)
 		return
 	}
 
-	// 2. 版本冲突检测（乐观锁）
-	if patchPayload.Version != room.Version {
-		// 版本不一致，拒绝或尝试合并
-		c.sendError(ErrVersionConflict, "版本冲突，请刷新")
+	// 2. 应用 Patch（版本检查在 ApplyPatch 内部的锁保护下进行）
+	if err := room.ApplyPatch(patchPayload.Patches, patchPayload.Version); err != nil {
+		// ✅ 使用类型断言判断错误类型，而非字符串匹配
+		var versionErr *VersionConflictError
+		var patchErr *PatchError
+
+		switch {
+		case errors.As(err, &versionErr):
+			c.sendError(ErrVersionConflict, fmt.Sprintf("current: %d, expected: %d",
+				versionErr.CurrentVersion, versionErr.ExpectedVersion))
+		case errors.As(err, &patchErr):
+			c.sendError(ErrPatchFailed, patchErr.Reason)
+		default:
+			c.sendError(ErrInternalError, err.Error())
+		}
+		log.Printf("[Client] Patch 处理失败: %v", err)
 		return
 	}
 
-	// 3. 核心：应用 Patch 到内存状态
-	if err := room.ApplyPatch(patchPayload.Patches); err != nil {
-		log.Printf("[Client] Patch 应用失败: %v", err)
-		c.sendError(ErrPatchFailed, err.Error())
-		return
-	}
-
-	// 4. 广播给房间内其他人
+	// 3. 广播给房间内其他人
 	c.Hub.Broadcast(c.RoomID, message, c)
 
 	log.Printf("[Client] ✅ 用户 [%s] Patch 已应用，新版本: %d",
@@ -121,10 +129,3 @@ func (c *Client) sendError(code ErrorCode, message string) {
 	data, _ := json.Marshal(msg)
 	c.send <- data
 }
-
-// TODO List:
-// 补丁应用和光标移动的message如何处理？补丁应用的message结构已经设计好了，那光标移动呢？
-// 为什么handleOpPatch的message里的Payload会有version？这是前端处理发的还是后端接收到后处理的？
-// 前端要如何处理后端发送的错误消息？
-// 版本冲突检测（乐观锁）太简单了，需要重新设计！
-// 需要重新审查下广播的设计

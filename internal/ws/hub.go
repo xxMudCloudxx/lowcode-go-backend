@@ -181,8 +181,9 @@ func (h *Hub) handleBroadcast(msg *BroadcastMessage) {
 		select {
 		case client.send <- msg.Message:
 		default:
-			close(client.send)
-			delete(room.Clients, client)
+			// ✅ 遇到阻塞只记录日志，不要 delete 也不要 close
+			// 让 WritePump 感知错误后触发 unregister 统一处理
+			log.Printf("[Hub] ⚠️ 客户端 [%s] 发送缓冲区已满，跳过广播", client.UserInfo.UserName)
 		}
 	}
 }
