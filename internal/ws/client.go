@@ -59,25 +59,24 @@ func (c *Client) ReadPump() {
 
 // handleOpPatch 处理 op-patch 消息
 func (c *Client) handleOpPatch(message []byte) {
-	var wsMsg WSMessage
-	json.Unmarshal(message, &wsMsg)
-
-	var patchPayload struct {
-		Patches json.RawMessage `json:"patches"` // RFC 6902 格式的 Patch 数组
-		Version int64           `json:"version"`
-	}
-	json.Unmarshal(wsMsg.Payload, &patchPayload)
-
-	// 1. 获取房间
-	room := c.Hub.GetRoom(c.RoomID)
-	if room == nil {
+	// 检查房间是否存在
+	if c.Room == nil {
 		c.sendError(ErrRoomNotFound, c.RoomID)
 		return
 	}
 
+	var wsMsg WSMessage
+	json.Unmarshal(message, &wsMsg)
+
+	var patchPayload struct {
+		Patches json.RawMessage `json:"patches"`
+		Version int64           `json:"version"`
+	}
+	json.Unmarshal(wsMsg.Payload, &patchPayload)
+
 	// 2. 应用 Patch（版本检查在 ApplyPatch 内部的锁保护下进行）
-	if err := room.ApplyPatch(patchPayload.Patches, patchPayload.Version); err != nil {
-		// ✅ 使用类型断言判断错误类型，而非字符串匹配
+	if err := c.Room.ApplyPatch(patchPayload.Patches, patchPayload.Version); err != nil {
+		// 使用类型断言判断错误类型，而非字符串匹配
 		var versionErr *VersionConflictError
 		var patchErr *PatchError
 
@@ -95,17 +94,20 @@ func (c *Client) handleOpPatch(message []byte) {
 	}
 
 	// 3. 广播给房间内其他人（Patch 是关键消息，阻塞时断开连接）
-	c.Hub.Broadcast(c.RoomID, message, c, true)
+	// 直接找 Room 广播，不经过 Hub，实现去中心化
+	c.Room.Broadcast(message, c, true)
 
 	log.Printf("[Client] ✅ 用户 [%s] Patch 已应用，新版本: %d",
-		c.UserInfo.UserName, room.Version)
+		c.UserInfo.UserName, c.Room.Version)
 }
 
 // handleCursorMove 处理光标移动消息
 // 光标是非关键消息（Ephemeral），阻塞时静默跳过
 func (c *Client) handleCursorMove(message []byte) {
-	// 广播给房间内其他人（非关键消息，阻塞时跳过）
-	c.Hub.Broadcast(c.RoomID, message, c, false)
+	// 直接找 Room 广播，不经过 Hub
+	if c.Room != nil {
+		c.Room.Broadcast(message, c, false)
+	}
 }
 
 // sendError 发送结构化错误消息

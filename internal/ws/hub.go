@@ -1,35 +1,18 @@
 package ws
 
 import (
-	"encoding/json"
 	"log"
 	"sync"
-	"time"
 )
 
-// BroadcastMessage 广播消息结构
-type BroadcastMessage struct {
-	RoomID     string
-	Message    []byte
-	Sender     *Client
-	IsCritical bool // 关键消息（如 Patch）阻塞时断开连接；非关键消息（如光标）阻塞时跳过
-}
+// ========== Actor Model: Hub 只是房间目录管理员 ==========
+// Hub 不处理任何业务消息，只管理 Room 的生命周期
 
-// Hub 维护所有活跃房间和客户端连接
+// Hub 维护房间目录
 type Hub struct {
-	// 房间映射改为 map[string]*Room
-	// 每个 Room 维护自己的 CurrentState
-	rooms     map[string]*Room
-	listeners map[*Client]bool
-
-	// Channel 事件通道
-	register   chan *Client
-	unregister chan *Client
-	broadcast  chan *BroadcastMessage
-
-	mu sync.RWMutex
-	wg sync.WaitGroup
-	// 数据库服务（用于加载初始状态）
+	rooms       map[string]*Room
+	mu          sync.RWMutex
+	destroyRoom chan *Room // 接收房间销毁请求
 	pageService PageService
 }
 
@@ -43,172 +26,60 @@ type PageService interface {
 func NewHub(pageService PageService) *Hub {
 	return &Hub{
 		rooms:       make(map[string]*Room),
-		listeners:   make(map[*Client]bool),
-		register:    make(chan *Client),
-		unregister:  make(chan *Client),
-		broadcast:   make(chan *BroadcastMessage, 256),
+		destroyRoom: make(chan *Room, 16),
 		pageService: pageService,
 	}
 }
 
-// Run 启动 Hub 事件循环
+// Run Hub 事件循环（非常轻量）
 func (h *Hub) Run() {
-	log.Println("[Hub] 🚀 Hub 事件循环已启动")
-	for {
-		select {
-		case client := <-h.register:
-			h.handleRegister(client)
-		case client := <-h.unregister:
-			h.handleUnregister(client)
-		case msg := <-h.broadcast:
-			h.handleBroadcast(msg)
-		}
-	}
+	log.Println("[Hub] 🚀 Hub 已启动（只管理房间目录）")
 
-}
-
-// handleRegister 处理客户端加入
-func (h *Hub) handleRegister(client *Client) {
-	// 将客户端加入房间
-	roomID := client.RoomID
-
-	h.mu.Lock()
-	room, exists := h.rooms[roomID]
-
-	if !exists {
-		state, version, err := h.pageService.GetPageState(roomID)
-
-		if err != nil {
-			log.Printf("[Hub] ⚠️ 加载页面失败: %v", err)
-			state = []byte(`{"rootd":1, "components":{1: {id: 1, name: "Page", props: {}, desc: "页面", parentId: null}}}`)
-			version = 1
-		}
-		room = NewRoom(roomID, state, h.pageService)
-		room.Version = version
-		h.rooms[roomID] = room
-		h.wg.Add(1)
-		log.Printf("[Hub]创建房间: %s", roomID)
-	}
-	h.mu.Unlock()
-
-	room.mu.Lock()
-	room.Clients[client] = true
-	room.mu.Unlock()
-	client.Room = room
-	// 发送最新快照给新用户
-	h.sendSyncMessage(client, room)
-}
-
-// sendSyncMessage 发送全量同步消息给新用户
-func (h *Hub) sendSyncMessage(client *Client, room *Room) {
-	snapshot, version := room.GetSnapshot()
-
-	room.mu.RLock()
-	// 收集房间内其他用户信息
-	users := make([]UserInfo, 0, len(room.Clients))
-	for c := range room.Clients {
-		if c != client {
-			users = append(users, c.UserInfo)
-		}
-	}
-	room.mu.RUnlock()
-
-	syncPayload := SyncPayload{
-		Schema:  snapshot,
-		Version: version,
-		Users:   users,
-	}
-
-	payload, _ := json.Marshal(syncPayload)
-	msg := WSMessage{
-		Type:      TypeSync,
-		SenderID:  "server",
-		Payload:   payload,
-		Timestamp: time.Now().UnixMilli(),
-	}
-
-	data, _ := json.Marshal(msg)
-	client.send <- data
-
-	log.Printf("[Hub] 📤 已发送 Sync 消息给 [%s], 版本: %d",
-		client.UserInfo.UserName, version)
-}
-
-// handleUnregister 处理客户端离开
-func (h *Hub) handleUnregister(client *Client) {
-	room := client.Room
-	if room == nil {
-		return
-	}
-
-	delete(room.Clients, client)
-	close(client.send)
-
-	// ⚠️ 房间空了，必须善后 + 加写锁
-	if len(room.Clients) == 0 {
-		room.Stop() // 停止 Goroutine
-
+	for room := range h.destroyRoom {
 		h.mu.Lock()
-		delete(h.rooms, room.ID)
+		if _, exists := h.rooms[room.ID]; exists {
+			delete(h.rooms, room.ID)
+			log.Printf("[Hub] 🗑️ 房间 %s 已从目录移除", room.ID)
+		}
 		h.mu.Unlock()
-
-		h.wg.Done() // 计数减一
-		log.Printf("[Hub] 🗑️ 房间 %s 已销毁", room.ID)
 	}
 }
 
-func (h *Hub) GetRoom(roomID string) *Room {
+// GetOrCreateRoom 线程安全地获取或创建房间
+// 这是外部进入房间的唯一入口
+func (h *Hub) GetOrCreateRoom(roomID string) *Room {
+	// 先尝试读锁快速路径
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.rooms[roomID]
-}
-
-// handleBroadcast 处理广播消息
-func (h *Hub) handleBroadcast(msg *BroadcastMessage) {
-	h.mu.RLock()
-	room := h.rooms[msg.RoomID]
+	room, exists := h.rooms[roomID]
 	h.mu.RUnlock()
-	if room == nil {
-		return
+
+	if exists {
+		return room
 	}
 
-	// 收集需要断开的客户端（关键消息阻塞时）
-	var clientsToKick []*Client
+	// 不存在，加写锁创建
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-	room.mu.RLock()
-	for client := range room.Clients {
-		if msg.Sender != nil && client == msg.Sender {
-			continue
-		}
-
-		select {
-		case client.send <- msg.Message:
-			// 发送成功
-		default:
-			if msg.IsCritical {
-				// 关键消息阻塞：必须断开连接，触发重连和全量同步
-				log.Printf("[Hub] ⚠️ 关键消息发送失败，断开客户端 [%s]", client.UserInfo.UserName)
-				clientsToKick = append(clientsToKick, client)
-			} else {
-				// 非关键消息阻塞：静默跳过（如光标移动）
-			}
-		}
+	// 双重检查（可能其他 goroutine 已经创建）
+	room, exists = h.rooms[roomID]
+	if exists {
+		return room
 	}
-	room.mu.RUnlock()
 
-	// 在锁外处理断开连接，避免死锁
-	for _, client := range clientsToKick {
-		h.unregister <- client
+	// 加载初始状态
+	state, version, err := h.pageService.GetPageState(roomID)
+	if err != nil {
+		log.Printf("[Hub] ⚠️ 加载页面 %s 失败: %v，使用默认状态", roomID, err)
+		state = []byte(`{"rootId":1,"components":{"1":{"id":1,"name":"Page","props":{},"desc":"页面","parentId":null}}}`)
+		version = 1
 	}
-}
 
-// Broadcast 外部调用接口
-// isCritical: true=关键消息（阻塞时断开连接）, false=非关键消息（阻塞时跳过）
-func (h *Hub) Broadcast(roomID string, message []byte, sender *Client, isCritical bool) {
-	h.broadcast <- &BroadcastMessage{
-		RoomID:     roomID,
-		Message:    message,
-		Sender:     sender,
-		IsCritical: isCritical,
-	}
+	// 创建房间（会自动启动事件循环）
+	room = NewRoom(roomID, state, h.pageService, h)
+	room.Version = version
+	h.rooms[roomID] = room
+
+	log.Printf("[Hub] 🏠 创建房间 %s，版本: %d", roomID, version)
+	return room
 }
