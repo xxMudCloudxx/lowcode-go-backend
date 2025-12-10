@@ -4,14 +4,11 @@ import (
 	"errors"
 
 	"lowercode-go-server/domain/entity"
+	domainErrors "lowercode-go-server/domain/errors"
 	domainRepo "lowercode-go-server/domain/repository"
 
 	"gorm.io/gorm"
 )
-
-// ErrOptimisticLock 乐观锁冲突错误
-// 当数据库中的版本与期望版本不匹配时返回此错误
-var ErrOptimisticLock = errors.New("optimistic lock error: version mismatch, please refresh and retry")
 
 // pageRepository GORM 实现 PageRepository 接口
 // 同时实现 ws.PageService 接口供 Hub 使用
@@ -59,7 +56,7 @@ func (r *pageRepository) UpdateSchema(pageID string, schema []byte, oldVersion i
 	// ⚠️ 关键：检查是否真的更新了记录
 	// 如果 RowsAffected == 0，说明版本冲突或页面不存在
 	if result.RowsAffected == 0 {
-		return ErrOptimisticLock
+		return domainErrors.ErrOptimisticLock
 	}
 
 	return nil
@@ -69,17 +66,26 @@ func (r *pageRepository) UpdateSchema(pageID string, schema []byte, oldVersion i
 // 这些方法供 Hub 直接调用，无需额外适配器
 
 // GetPageState 获取页面状态（供 Hub 使用）
+// ⚠️ 修复幽灵页面 Bug：页面不存在时返回明确错误，而非默认值
 func (r *pageRepository) GetPageState(pageID string) ([]byte, int64, error) {
 	page, err := r.GetByPageID(pageID)
 	if err != nil {
 		return nil, 0, err
 	}
 	if page == nil {
-		// 页面不存在，返回默认空 Schema
-		emptySchema := `{"rootId":1,"components":{"1":{"id":1,"name":"Page","props":{},"desc":"页面","parentId":null}}}`
-		return []byte(emptySchema), 1, nil
+		// ⚠️ 关键修复：页面不存在，返回错误，阻止幽灵房间的创建
+		return nil, 0, domainErrors.ErrPageNotFound
 	}
 	return []byte(page.Schema), page.Version, nil
+}
+
+// PageExists 检查页面是否存在（供 Hub 前置检查使用）
+func (r *pageRepository) PageExists(pageID string) (bool, error) {
+	page, err := r.GetByPageID(pageID)
+	if err != nil {
+		return false, err
+	}
+	return page != nil, nil
 }
 
 // SavePageState 保存页面状态（供 Hub 使用）

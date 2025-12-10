@@ -6,6 +6,7 @@ import (
 	"lowercode-go-server/internal/ws"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
+	"gorm.io/datatypes"
 )
 
 // PageUseCase 页面业务逻辑层
@@ -23,14 +24,16 @@ func NewPageUseCase(repo repository.PageRepository, hub *ws.Hub) *PageUseCase {
 }
 
 // GetPage 获取页面
+// ⚠️ 修复"观察者效应"问题：使用只读的 GetRoom，不创建房间
 // 优先从 Hub 内存读取（保证读到最新协同状态），否则读数据库
 func (uc *PageUseCase) GetPage(pageID string) (*entity.Page, error) {
 	// 1. 优先从 Hub 内存读取（协同编辑中的热数据）
-	if room := uc.hub.GetOrCreateRoom(pageID); room != nil {
+	// ⚠️ 使用 GetRoom 而非 GetOrCreateRoom，避免 HTTP GET 触发房间创建
+	if room := uc.hub.GetRoom(pageID); room != nil {
 		snapshot, version := room.GetSnapshot()
 		return &entity.Page{
 			PageID:  pageID,
-			Schema:  string(snapshot),
+			Schema:  datatypes.JSON(snapshot), // datatypes.JSON 是 []byte 别名
 			Version: version,
 		}, nil
 	}
@@ -40,13 +43,18 @@ func (uc *PageUseCase) GetPage(pageID string) (*entity.Page, error) {
 }
 
 // CreatePage 创建新页面
+// ⚠️ 使用强类型的 NewDefaultSchema，避免硬编码 JSON 字符串
 func (uc *PageUseCase) CreatePage(pageID, creatorID string) (*entity.Page, error) {
-	// 默认空 Schema
-	defaultSchema := `{"rootId":1,"components":{"1":{"id":1,"name":"Page","desc":"页面根节点","children":[]}}}`
+	// 使用工厂方法创建默认 Schema（类型安全）
+	defaultSchema := entity.NewDefaultSchema()
+	schemaBytes, err := defaultSchema.ToBytes()
+	if err != nil {
+		return nil, err
+	}
 
 	page := &entity.Page{
 		PageID:    pageID,
-		Schema:    defaultSchema,
+		Schema:    datatypes.JSON(schemaBytes),
 		Version:   1,
 		CreatorID: creatorID,
 	}

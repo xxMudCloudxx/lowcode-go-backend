@@ -1,8 +1,11 @@
 package ws
 
 import (
+	"errors"
 	"log"
 	"sync"
+
+	domainErrors "lowercode-go-server/domain/errors"
 )
 
 // ========== Actor Model: Hub 是生死的唯一仲裁者 ==========
@@ -18,7 +21,10 @@ type Hub struct {
 
 // PageService 接口，用于数据库操作
 type PageService interface {
+	// GetPageState 返回页面状态，如果页面不存在返回 (nil, 0, ErrPageNotFound)
 	GetPageState(pageID string) ([]byte, int64, error)
+	// PageExists 检查页面是否存在
+	PageExists(pageID string) (bool, error)
 	SavePageState(pageID string, state []byte, version int64) error
 }
 
@@ -65,16 +71,31 @@ func (h *Hub) handleIdleRoom(room *Room) {
 	log.Printf("[Hub] 🗑️ 房间 %s 已销毁", room.ID)
 }
 
+// GetRoom 只读获取房间，不创建（供 HTTP GET 请求使用）
+// 返回 nil 表示房间不存在于内存中
+// ⚠️ 这是解决"观察者效应"问题的关键方法
+func (h *Hub) GetRoom(roomID string) *Room {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	room, exists := h.rooms[roomID]
+	if exists && !room.IsStopping() {
+		return room
+	}
+	return nil
+}
+
 // GetOrCreateRoom 线程安全地获取或创建房间
-// 这是外部进入房间的唯一入口
-func (h *Hub) GetOrCreateRoom(roomID string) *Room {
+// ⚠️ 只有在数据库中存在的页面才会创建房间（Pre-creation 模式）
+// 返回值: (*Room, error) - 如果页面不存在，返回 ErrPageNotFound
+func (h *Hub) GetOrCreateRoom(roomID string) (*Room, error) {
 	// 先尝试读锁快速路径
 	h.mu.RLock()
 	room, exists := h.rooms[roomID]
 	h.mu.RUnlock()
 
 	if exists && !room.IsStopping() {
-		return room
+		return room, nil
 	}
 
 	// 不存在或正在停止，加写锁创建
@@ -84,15 +105,19 @@ func (h *Hub) GetOrCreateRoom(roomID string) *Room {
 	// 双重检查
 	room, exists = h.rooms[roomID]
 	if exists && !room.IsStopping() {
-		return room
+		return room, nil
 	}
 
-	// 加载初始状态
+	// ⚠️ 关键修复：从数据库加载状态，如果页面不存在，返回错误
 	state, version, err := h.pageService.GetPageState(roomID)
 	if err != nil {
-		log.Printf("[Hub] ⚠️ 加载页面 %s 失败: %v，使用默认状态", roomID, err)
-		state = []byte(`{"rootId":1,"components":{"1":{"id":1,"name":"Page","props":{},"desc":"页面","parentId":null}}}`)
-		version = 1
+		if errors.Is(err, domainErrors.ErrPageNotFound) {
+			log.Printf("[Hub] ❌ 页面 %s 不存在，拒绝创建房间", roomID)
+			return nil, domainErrors.ErrPageNotFound
+		}
+		// 其他数据库错误
+		log.Printf("[Hub] ⚠️ 加载页面 %s 失败: %v", roomID, err)
+		return nil, err
 	}
 
 	// 创建房间
@@ -101,7 +126,7 @@ func (h *Hub) GetOrCreateRoom(roomID string) *Room {
 	h.rooms[roomID] = room
 
 	log.Printf("[Hub] 🏠 创建房间 %s，版本: %d", roomID, version)
-	return room
+	return room, nil
 }
 
 // NotifyIdle 供 Room 调用，通知 Hub 房间空闲
