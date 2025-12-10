@@ -49,8 +49,9 @@ func (c *Client) ReadPump() {
 		switch msg.Type {
 		case TypeOpPatch:
 			c.handleOpPatch(message)
-		case TypeCursorMove:
-			c.handleCursorMove(message)
+			// TODO：设计好后取消注释
+			// case TypeCursorMove:
+			// 	c.handleCursorMove(message)
 		}
 	}
 }
@@ -75,14 +76,14 @@ func (c *Client) handleOpPatch(message []byte) {
 	// 2. 版本冲突检测（乐观锁）
 	if patchPayload.Version != room.Version {
 		// 版本不一致，拒绝或尝试合并
-		c.sendError("版本冲突，请刷新")
+		c.sendError(ErrVersionConflict, "版本冲突，请刷新")
 		return
 	}
 
 	// 3. 核心：应用 Patch 到内存状态
 	if err := room.ApplyPatch(patchPayload.Patches); err != nil {
 		log.Printf("[Client] Patch 应用失败: %v", err)
-		c.sendError(err.Error())
+		c.sendError(ErrPatchFailed, err.Error())
 		return
 	}
 
@@ -96,16 +97,21 @@ func (c *Client) handleOpPatch(message []byte) {
 // TODP: 需要重新设计
 // handleCursorMove 处理光标移动消息
 // 光标移动不需要服务器处理，直接广播给房间内其他用户
-func (c *Client) handleCursorMove(message []byte) {
-	// 直接广播给房间内其他人（不包括自己）
-	c.Hub.Broadcast(c.RoomID, message, c)
+// func (c *Client) handleCursorMove(message []byte) {
+// 	// 直接广播给房间内其他人（不包括自己）
+// 	c.Hub.Broadcast(c.RoomID, message, c)
 
-	log.Printf("[Client] 光标移动: 用户 [%s] 在房间 [%s]", c.UserInfo.UserName, c.RoomID)
-}
+// 	log.Printf("[Client] 光标移动: 用户 [%s] 在房间 [%s]", c.UserInfo.UserName, c.RoomID)
+// }
 
-// sendError 发送错误消息
-func (c *Client) sendError(message string) {
-	errPayload, _ := json.Marshal(map[string]string{"message": message})
+// sendError 发送结构化错误消息
+// code: 错误码（前端用于判断逻辑分支）
+// message: 错误描述（用于调试/日志）
+func (c *Client) sendError(code ErrorCode, message string) {
+	errPayload, _ := json.Marshal(ErrorPayload{
+		Code:    code,
+		Message: message,
+	})
 	msg := WSMessage{
 		Type:      TypeError,
 		SenderID:  "server",
