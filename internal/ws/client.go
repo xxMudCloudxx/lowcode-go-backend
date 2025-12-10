@@ -128,6 +128,7 @@ func (c *Client) ReadPump() {
 }
 
 // handleOpPatch 处理 op-patch 消息
+// TODO：未来参考Google Doc的协同编辑实现
 func (c *Client) handleOpPatch(message []byte) {
 	// 检查房间是否存在
 	if c.Room == nil {
