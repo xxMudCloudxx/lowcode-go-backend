@@ -20,3 +20,7 @@ var ErrPageAlreadyExists = errors.New("page already exists")
 // ErrUnauthorized 无权限错误
 // 当用户尝试操作没有权限的资源时返回此错误（如删除他人的页面）
 var ErrUnauthorized = errors.New("unauthorized: you don't have permission to perform this action")
+
+// ErrRoomClosing 房间正在关闭错误
+// 当 WebSocket 尝试连接一个正在关闭的房间时返回此错误，客户端应重试
+var ErrRoomClosing = errors.New("room is closing, please retry")

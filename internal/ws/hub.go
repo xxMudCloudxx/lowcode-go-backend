@@ -45,44 +45,49 @@ func (h *Hub) Run() {
 	log.Println("[Hub] 🚀 Hub 已启动（生死仲裁者）")
 
 	for room := range h.idleRoom {
-		h.handleIdleRoom(room)
+		// ✅ 使用 goroutine 避免阻塞 Hub 事件循环
+		// 因为 handleIdleRoom 现在会阻塞等待刷盘完成
+		go h.handleIdleRoom(room)
 	}
 }
 
 // handleIdleRoom 处理空闲房间（双重检查后决定是否销毁）
+// ⚠️ 关键修复：先刷盘，再从 Hub 移除，并检查指针同一性
 func (h *Hub) handleIdleRoom(room *Room) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	// 双重检查：Room 可能在我们处理期间又有人加入了
 	if room.ClientCount() > 0 {
 		log.Printf("[Hub] 🔄 房间 %s 已有新用户，取消销毁", room.ID)
 		return
 	}
 
-	// 确认房间还在 map 中
-	if _, exists := h.rooms[room.ID]; !exists {
-		return
-	}
-
-	// 从 map 中移除
-	delete(h.rooms, room.ID)
-
-	// 通知 Room 停止（Room 收到 stopChan 才真正退出）
+	// ✅ 先停止房间（阻塞等待刷盘完成）
 	room.Stop()
 
-	log.Printf("[Hub] 🗑️ 房间 %s 已销毁", room.ID)
+	// ✅ 安全删除：检查指针同一性，防止误删新创建的房间
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// ⚠️ 关键：检查 Map 里的房间是不是当初那个房间
+	// 防止 GetOrCreateRoom 在刷盘期间创建了新房间，结果被我们删了
+	if currentRoom, ok := h.rooms[room.ID]; ok && currentRoom == room {
+		delete(h.rooms, room.ID)
+		log.Printf("[Hub] 🗑️ 房间 %s 已销毁", room.ID)
+	} else {
+		log.Printf("[Hub] ⚠️ 房间 %s 销毁时发现已被替换或移除，跳过删除", room.ID)
+	}
 }
 
 // GetRoom 只读获取房间，不创建（供 HTTP GET 请求使用）
-// 返回 nil 表示房间不存在于内存中
-// ⚠️ 这是解决"观察者效应"问题的关键方法
+// ✅ 修正：只要房间在内存，就返回它，因为内存数据永远比 DB 新
+// 即使房间正在 Stopping，它的 State 仍然是可读的（有 stateMu 保护）
 func (h *Hub) GetRoom(roomID string) *Room {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
 	room, exists := h.rooms[roomID]
-	if exists && !room.IsStopping() {
+	// ✅ 只要存在就返回，哪怕正在 stopping
+	// stopping 的房间仍持有最新数据，且 GetSnapshot 有 stateMu 保护
+	if exists {
 		return room
 	}
 	return nil
@@ -97,17 +102,27 @@ func (h *Hub) GetOrCreateRoom(roomID string) (*Room, error) {
 	room, exists := h.rooms[roomID]
 	h.mu.RUnlock()
 
-	if exists && !room.IsStopping() {
+	if exists {
+		// ⚠️ 关键修正：如果房间存在但正在停止，返回错误让客户端重试
+		if room.IsStopping() {
+			log.Printf("[Hub] ⏳ 房间 %s 正在关闭，请客户端重试", roomID)
+			return nil, domainErrors.ErrRoomClosing
+		}
 		return room, nil
 	}
 
-	// 不存在或正在停止，加写锁创建
+	// 不存在，加写锁创建
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	// 双重检查
 	room, exists = h.rooms[roomID]
-	if exists && !room.IsStopping() {
+	if exists {
+		// ⚠️ 关键修正：如果房间存在但正在停止，返回错误让客户端重试
+		if room.IsStopping() {
+			log.Printf("[Hub] ⏳ 房间 %s 正在关闭，请客户端重试", roomID)
+			return nil, domainErrors.ErrRoomClosing
+		}
 		return room, nil
 	}
 
@@ -139,22 +154,20 @@ func (h *Hub) NotifyIdle(room *Room) {
 }
 
 // CloseRoom 强制关闭房间（供 API 删除页面时调用）
-// ⚠️ 这是流程的第一步：先关闭房间，后删数据库
+// ⚠️ 这是"处决"流程的第一步：先关闭房间并刷盘，后删数据库
 func (h *Hub) CloseRoom(roomID string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	room, exists := h.rooms[roomID]
 	if !exists {
+		h.mu.Unlock()
 		log.Printf("[Hub] ℹ️ 房间 %s 不存在于内存中，无需关闭", roomID)
 		return
 	}
-
-	// 1. 先从 Hub 目录中移除（防止新用户加入）
+	// 先从 map 中移除（防止新用户加入）
 	delete(h.rooms, roomID)
+	h.mu.Unlock()
 
-	// 2. 通知房间内所有用户，页面已被删除
-	// 使用 StopWithReason 发送 PAGE_DELETED 错误，让前端显示友好提示
+	// ✅ 停止房间并刷盘（StopWithReason 是阻塞的）
 	room.StopWithReason(ErrPageDeleted, "页面已被删除")
 
 	log.Printf("[Hub] 💀 强制关闭房间 %s（页面被删除）", roomID)

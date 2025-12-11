@@ -27,6 +27,7 @@ type Room struct {
 	register   chan *Client        // 加入请求
 	unregister chan *Client        // 退出请求
 	stopChan   chan struct{}       // 停止信号（由 Hub 发送）
+	doneChan   chan struct{}       // run() 完全退出信号（包括 flushToDB）
 
 	// 状态标志
 	stopping    bool         // 是否正在停止
@@ -69,6 +70,7 @@ func NewRoom(id string, initialState []byte, pageService PageService, hub *Hub) 
 		register:     make(chan *Client),
 		unregister:   make(chan *Client),
 		stopChan:     make(chan struct{}),
+		doneChan:     make(chan struct{}), // 用于等待 run() 完全退出
 		flushTicker:  time.NewTicker(FlushInterval),
 		pageService:  pageService,
 		hub:          hub,
@@ -84,7 +86,8 @@ func NewRoom(id string, initialState []byte, pageService PageService, hub *Hub) 
 func (r *Room) run() {
 	defer func() {
 		r.flushTicker.Stop()
-		r.flushToDB("销毁前")
+		r.flushToDB("销毁前") // ✅ 先刷盘
+		close(r.doneChan)  // ✅ 通知 Stop() 已完成
 		log.Printf("[Room %s] 🛑 事件循环已停止", r.ID)
 	}()
 
@@ -213,18 +216,32 @@ func (r *Room) Broadcast(message []byte, sender *Client, isCritical bool) {
 	}
 }
 
-// Stop 停止房间（由 Hub 调用）
+// Stop 停止房间并阻塞等待刷盘完成（由 Hub 调用）
+// ⚠️ 这是一个阻塞调用，确保 "先刷盘，再从 Hub 移除" 的顺序
 func (r *Room) Stop() {
 	r.countMu.Lock()
+	if r.stopping {
+		r.countMu.Unlock()
+		<-r.doneChan // 已经在停止中，等待完成
+		return
+	}
 	r.stopping = true
 	r.countMu.Unlock()
-	close(r.stopChan)
+
+	close(r.stopChan) // 发送停止信号
+	<-r.doneChan      // ✅ 阻塞等待 run() 完全退出（包括 flushToDB）
 }
 
 // StopWithReason 带原因的停止房间（页面被删除时调用）
 // reason: 通知客户端的错误码（如 PAGE_DELETED）
+// ⚠️ 这是一个阻塞调用，确保 "先刷盘，再从 Hub 移除" 的顺序
 func (r *Room) StopWithReason(reason ErrorCode, message string) {
 	r.countMu.Lock()
+	if r.stopping {
+		r.countMu.Unlock()
+		<-r.doneChan // 已经在停止中，等待完成
+		return
+	}
 	r.stopping = true
 	r.countMu.Unlock()
 
@@ -234,7 +251,8 @@ func (r *Room) StopWithReason(reason ErrorCode, message string) {
 	// 等一小段时间让消息发出去
 	time.Sleep(100 * time.Millisecond)
 
-	close(r.stopChan)
+	close(r.stopChan) // 发送停止信号
+	<-r.doneChan      // ✅ 阻塞等待 run() 完全退出（包括 flushToDB）
 }
 
 // broadcastError 广播错误消息给所有客户端

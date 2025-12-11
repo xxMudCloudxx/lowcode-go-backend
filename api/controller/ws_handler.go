@@ -86,6 +86,15 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "页面不存在"})
 			return
 		}
+		// ⚠️ 房间正在关闭，让客户端重试
+		if errors.Is(err, domainErrors.ErrRoomClosing) {
+			c.Header("Retry-After", "0.1") // 100ms 后重试
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":      "房间正在关闭，请稍后重试",
+				"retryAfter": 100, // 毫秒
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
