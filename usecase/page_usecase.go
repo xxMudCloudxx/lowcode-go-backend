@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"lowercode-go-server/domain/entity"
+	domainErrors "lowercode-go-server/domain/errors"
 	"lowercode-go-server/domain/repository"
 	"lowercode-go-server/internal/ws"
 
@@ -68,15 +69,30 @@ func (uc *PageUseCase) CreatePage(pageID, creatorID string) (*entity.Page, error
 
 // DeletePage 删除页面
 // ⚠️ 实现"先杀人，后毁尸"的安全删除流程：
-// 1. 先斩：强制关闭内存中的协同房间（通知所有在线用户）
-// 2. 后奏：删除数据库记录
-func (uc *PageUseCase) DeletePage(pageID string) error {
-	// 1. 先斩：强制关闭内存中的协同房间
+// 1. 检查权限：只有创建者才能删除
+// 2. 先斩：强制关闭内存中的协同房间（通知所有在线用户）
+// 3. 后奏：删除数据库记录
+func (uc *PageUseCase) DeletePage(pageID, operatorID string) error {
+	// 1. 先查出页面，检查权限
+	page, err := uc.repo.GetByPageID(pageID)
+	if err != nil {
+		return err
+	}
+	if page == nil {
+		return domainErrors.ErrPageNotFound
+	}
+
+	// 2. 权限检查：只有创建者才能删除（防止 IDOR 越权删除）
+	if page.CreatorID != operatorID {
+		return domainErrors.ErrUnauthorized
+	}
+
+	// 3. 先斩：强制关闭内存中的协同房间
 	// 这一步必须在删库之前，防止新的写入
 	// Hub.CloseRoom 会广播 PAGE_DELETED 消息给所有在线用户
 	uc.hub.CloseRoom(pageID)
 
-	// 2. 后奏：删除数据库记录
+	// 4. 后奏：删除数据库记录
 	return uc.repo.Delete(pageID)
 }
 

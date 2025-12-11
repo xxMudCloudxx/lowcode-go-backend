@@ -29,7 +29,7 @@ func ClerkAuth() gin.HandlerFunc {
 		}
 
 		// 3. 将用户信息注入上下文，供后续 Controller 使用
-		c.Set("userID", claims.Subject)
+		c.Set(ContextKeyUserID, claims.Subject)
 
 		c.Next()
 	}

@@ -1,12 +1,39 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 
+	"lowercode-go-server/api/middleware"
+	domainErrors "lowercode-go-server/domain/errors"
 	"lowercode-go-server/usecase"
 
 	"github.com/gin-gonic/gin"
 )
+
+// ========== Response DTOs ==========
+// 使用强类型结构体代替 gin.H，便于文档化和类型检查
+
+// PageResponse 页面响应结构
+type PageResponse struct {
+	PageID  string      `json:"pageId"`
+	Schema  interface{} `json:"schema"`
+	Version int64       `json:"version"`
+}
+
+// ErrorResponse 错误响应结构
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Details string `json:"details,omitempty"`
+}
+
+// MessageResponse 消息响应结构
+type MessageResponse struct {
+	Message string `json:"message"`
+	PageID  string `json:"pageId,omitempty"`
+}
+
+// ========== Controller ==========
 
 // PageController 页面相关的 HTTP 控制器
 type PageController struct {
@@ -24,64 +51,65 @@ func NewPageController(pageUseCase *usecase.PageUseCase) *PageController {
 func (pc *PageController) GetPage(c *gin.Context) {
 	pageID := c.Param("pageId")
 	if pageID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "pageId 不能为空"})
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "pageId 不能为空"})
 		return
 	}
 
 	page, err := pc.pageUseCase.GetPage(pageID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}
 
 	if page == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "页面不存在"})
+		c.JSON(http.StatusNotFound, ErrorResponse{Error: "页面不存在"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"pageId":  page.PageID,
-		"schema":  page.Schema,
-		"version": page.Version,
+	c.JSON(http.StatusOK, PageResponse{
+		PageID:  page.PageID,
+		Schema:  page.Schema,
+		Version: page.Version,
 	})
+}
+
+// CreatePageRequest 创建页面请求结构
+type CreatePageRequest struct {
+	PageID string `json:"pageId" binding:"required"`
 }
 
 // CreatePage 创建新页面
 // POST /api/pages
 // 请求体: { "pageId": "xxx" }
 func (pc *PageController) CreatePage(c *gin.Context) {
-	var req struct {
-		PageID string `json:"pageId" binding:"required"`
-	}
-
+	var req CreatePageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "pageId 不能为空"})
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "pageId 不能为空"})
 		return
 	}
 
-	// 从 Clerk 中间件获取用户 ID
-	userID, exists := c.Get("userID")
+	// 从 Clerk 中间件获取用户 ID（使用常量避免魔法字符串）
+	userID, exists := c.Get(middleware.ContextKeyUserID)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未获取到用户信息"})
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "未获取到用户信息"})
 		return
 	}
 
 	page, err := pc.pageUseCase.CreatePage(req.PageID, userID.(string))
 	if err != nil {
-		// 判断是否是重复创建
-		if err.Error() == "UNIQUE constraint failed" ||
-			(len(err.Error()) > 0 && err.Error()[:9] == "duplicate") {
-			c.JSON(http.StatusConflict, gin.H{"error": "页面已存在"})
+		// 使用 errors.Is 判断业务错误类型，而非字符串匹配
+		if errors.Is(err, domainErrors.ErrPageAlreadyExists) {
+			c.JSON(http.StatusConflict, ErrorResponse{Error: "页面已存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"pageId":  page.PageID,
-		"schema":  page.Schema,
-		"version": page.Version,
+	c.JSON(http.StatusCreated, PageResponse{
+		PageID:  page.PageID,
+		Schema:  page.Schema,
+		Version: page.Version,
 	})
 }
 
@@ -91,29 +119,33 @@ func (pc *PageController) CreatePage(c *gin.Context) {
 func (pc *PageController) DeletePage(c *gin.Context) {
 	pageID := c.Param("pageId")
 	if pageID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "pageId 不能为空"})
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "pageId 不能为空"})
 		return
 	}
 
-	// 从 Clerk 中间件获取用户 ID
-	userID, exists := c.Get("userID")
+	// 从 Clerk 中间件获取用户 ID（使用常量避免魔法字符串）
+	userID, exists := c.Get(middleware.ContextKeyUserID)
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "未获取到用户信息"})
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "未获取到用户信息"})
 		return
 	}
 
-	// TODO: 检查用户是否有权限删除（是否是创建者）
-	// page, _ := pc.pageUseCase.GetPage(pageID)
-	// if page.CreatorID != userID.(string) { ... }
-	_ = userID // 暂时忽略，后续添加权限检查
-
-	if err := pc.pageUseCase.DeletePage(pageID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	// 调用 UseCase，权限检查在业务层进行
+	if err := pc.pageUseCase.DeletePage(pageID, userID.(string)); err != nil {
+		// 使用 errors.Is 判断业务错误类型
+		switch {
+		case errors.Is(err, domainErrors.ErrPageNotFound):
+			c.JSON(http.StatusNotFound, ErrorResponse{Error: "页面不存在"})
+		case errors.Is(err, domainErrors.ErrUnauthorized):
+			c.JSON(http.StatusForbidden, ErrorResponse{Error: "无权限删除此页面"})
+		default:
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+		}
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "页面已删除",
-		"pageId":  pageID,
+	c.JSON(http.StatusOK, MessageResponse{
+		Message: "页面已删除",
+		PageID:  pageID,
 	})
 }

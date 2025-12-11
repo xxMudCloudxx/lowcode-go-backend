@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 
 	"lowercode-go-server/domain/entity"
 	domainErrors "lowercode-go-server/domain/errors"
@@ -36,7 +37,18 @@ func (r *pageRepository) GetByPageID(pageID string) (*entity.Page, error) {
 // Create 创建新页面（仅用于首次创建）
 // ⚠️ 禁止使用 GORM Save，它会覆盖 schema 和 version
 func (r *pageRepository) Create(page *entity.Page) error {
-	return r.db.Create(page).Error
+	err := r.db.Create(page).Error
+	if err != nil {
+		// 检查是否是唯一约束冲突（页面已存在）
+		// PostgreSQL 错误码 23505 = unique_violation
+		if strings.Contains(err.Error(), "duplicate key") ||
+			strings.Contains(err.Error(), "23505") ||
+			strings.Contains(err.Error(), "UNIQUE constraint") {
+			return domainErrors.ErrPageAlreadyExists
+		}
+		return err
+	}
+	return nil
 }
 
 // UpdateSchema 只更新 Schema 字段（协同编辑热路径）
