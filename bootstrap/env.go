@@ -18,9 +18,8 @@ type Env struct {
 // LoadEnv 加载环境变量
 // 开发环境从 .env 文件加载，生产环境从系统环境变量读取
 func LoadEnv() *Env {
-	// 尝试加载 .env 文件（生产环境可能没有）
 	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️ .env 文件未找到，将使用系统环境变量")
+		log.Println("[Env] .env 文件未找到，将使用系统环境变量")
 	}
 
 	env := &Env{
@@ -37,9 +36,9 @@ func LoadEnv() *Env {
 
 	// 必需变量检查
 	if env.DatabaseURL == "" {
-		log.Fatal("❌ 缺少必需环境变量: DATABASE_URL")
+		log.Fatal("[Env] 缺少必需环境变量: DATABASE_URL")
 	}
 
-	log.Printf("✅ 环境变量加载完成, 端口: %s", env.Port)
+	log.Printf("[Env] 环境变量加载完成, 端口: %s", env.Port)
 	return env
 }

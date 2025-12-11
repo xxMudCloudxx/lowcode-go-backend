@@ -10,31 +10,29 @@ import (
 	jsonpatch "github.com/evanphx/json-patch/v5"
 )
 
-// ========== Actor Model: Room 是完全自治的独立单元 ==========
-// clients map 只在 run() 循环内访问，无需锁！
-
-// Room 既包含数据，也包含处理逻辑（Actor Model）
+// Room 代表一个协同编辑房间，采用 Actor Model 模式实现。
+// 所有对 clients map 的操作都在 run() 事件循环中串行处理，因此无需加锁。
 type Room struct {
 	ID           string
 	CurrentState []byte
 	Version      int64
 
-	// 私有 clients map - 只在 run() 内访问，无需锁
+	// clients map 只在 run() 内访问，无需锁保护
 	clients map[*Client]bool
 
-	// 事件通道：所有操作都变成消息
+	// 事件通道
 	broadcast  chan *RoomBroadcast // 广播消息
 	register   chan *Client        // 加入请求
 	unregister chan *Client        // 退出请求
-	stopChan   chan struct{}       // 停止信号（由 Hub 发送）
-	doneChan   chan struct{}       // run() 完全退出信号（包括 flushToDB）
+	stopChan   chan struct{}       // 停止信号
+	doneChan   chan struct{}       // run() 完全退出信号
 
 	// 状态标志
 	stopping    bool         // 是否正在停止
-	clientCount int          // 客户端计数（供 Hub 双重检查）
+	clientCount int          // 客户端计数，供 Hub 双重检查使用
 	countMu     sync.RWMutex // 保护 clientCount 和 stopping
 
-	// 状态锁 - 只用于保护 CurrentState/Version 的并发读写
+	// 状态锁，仅用于保护 CurrentState 和 Version 的并发读写
 	stateMu sync.RWMutex
 
 	// 刷盘相关
@@ -42,7 +40,7 @@ type Room struct {
 	flushTicker          *time.Ticker
 	pageService          PageService
 
-	// 反向引用：通知 Hub
+	// Hub 反向引用
 	hub *Hub
 }
 
@@ -53,10 +51,10 @@ type RoomBroadcast struct {
 	IsCritical bool
 }
 
-// 刷盘配置
+// 刷盘配置常量
 const (
-	FlushInterval  = 30 * time.Second
-	FlushThreshold = 50
+	FlushInterval  = 30 * time.Second // 定时刷盘间隔
+	FlushThreshold = 50               // 版本差异阈值触发刷盘
 )
 
 // NewRoom 创建房间并启动事件循环
@@ -70,54 +68,54 @@ func NewRoom(id string, initialState []byte, pageService PageService, hub *Hub) 
 		register:     make(chan *Client),
 		unregister:   make(chan *Client),
 		stopChan:     make(chan struct{}),
-		doneChan:     make(chan struct{}), // 用于等待 run() 完全退出
+		doneChan:     make(chan struct{}),
 		flushTicker:  time.NewTicker(FlushInterval),
 		pageService:  pageService,
 		hub:          hub,
 	}
 
-	go r.run() // 启动房间事件循环
+	go r.run()
 
-	log.Printf("[Room %s] 🚀 已创建并启动", id)
+	log.Printf("[Room %s] 已创建并启动", id)
 	return r
 }
 
-// run 是房间的主宰，所有逻辑都在这里串行处理，所以 clients map 不需要锁！
+// run 是房间的主事件循环，所有操作在此串行处理。
 func (r *Room) run() {
 	defer func() {
 		r.flushTicker.Stop()
-		r.flushToDB("销毁前") // ✅ 先刷盘
-		close(r.doneChan)  // ✅ 通知 Stop() 已完成
-		log.Printf("[Room %s] 🛑 事件循环已停止", r.ID)
+		r.flushToDB("销毁前")
+		close(r.doneChan)
+		log.Printf("[Room %s] 事件循环已停止", r.ID)
 	}()
 
 	for {
 		select {
-		// 1. 处理客户端注册 (无锁！)
+		// 处理客户端注册
 		case client := <-r.register:
 			r.clients[client] = true
 			client.Room = r
 			r.updateClientCount(1)
 			r.sendSyncToClient(client)
-			log.Printf("[Room %s] 👋 用户 [%s] 加入，当前人数: %d",
+			log.Printf("[Room %s] 用户 [%s] 加入，当前人数: %d",
 				r.ID, client.UserInfo.UserName, len(r.clients))
 
-		// 2. 处理客户端注销 (无锁！)
+		// 处理客户端注销
 		case client := <-r.unregister:
 			if _, ok := r.clients[client]; ok {
 				delete(r.clients, client)
 				close(client.send)
 				r.updateClientCount(-1)
-				log.Printf("[Room %s] 👋 用户 [%s] 离开，剩余人数: %d",
+				log.Printf("[Room %s] 用户 [%s] 离开，剩余人数: %d",
 					r.ID, client.UserInfo.UserName, len(r.clients))
 
-				// 房间空了，通知 Hub 请求销毁（不立即退出，等 Hub 确认）
+				// 房间空闲时通知 Hub
 				if len(r.clients) == 0 && r.hub != nil {
 					r.hub.NotifyIdle(r)
 				}
 			}
 
-		// 3. 处理广播 (核心热路径 - 无锁！)
+		// 处理广播消息
 		case msg := <-r.broadcast:
 			for client := range r.clients {
 				if msg.Sender != nil && client == msg.Sender {
@@ -128,9 +126,9 @@ func (r *Room) run() {
 				case client.send <- msg.Message:
 					// 发送成功
 				default:
-					// 缓冲区满
+					// 缓冲区满时的处理策略
 					if msg.IsCritical {
-						log.Printf("[Room %s] ⚠️ 关键消息阻塞，踢出 [%s]",
+						log.Printf("[Room %s] 关键消息阻塞，踢出用户 [%s]",
 							r.ID, client.UserInfo.UserName)
 						delete(r.clients, client)
 						close(client.send)
@@ -139,18 +137,18 @@ func (r *Room) run() {
 				}
 			}
 
-		// 4. 定时刷盘
+		// 定时刷盘
 		case <-r.flushTicker.C:
 			r.flushToDB("定时")
 
-		// 5. 停止信号
+		// 停止信号
 		case <-r.stopChan:
 			return
 		}
 	}
 }
 
-// sendSyncToClient 发送全量同步消息给新用户
+// sendSyncToClient 向新加入的客户端发送全量同步消息
 func (r *Room) sendSyncToClient(client *Client) {
 	snapshot, version := r.GetSnapshot()
 
@@ -179,35 +177,36 @@ func (r *Room) sendSyncToClient(client *Client) {
 	data, _ := json.Marshal(msg)
 	client.send <- data
 
-	log.Printf("[Room %s] 📤 已发送 Sync 给 [%s], 版本: %d",
+	log.Printf("[Room %s] 已发送 Sync 给 [%s], 版本: %d",
 		r.ID, client.UserInfo.UserName, version)
 }
 
-// ========== 对外暴露的接口 ==========
+// --- 对外接口 ---
 
 // ErrRoomClosed 房间已关闭错误
 var ErrRoomClosed = fmt.Errorf("room is closing")
 
-// Register 注册客户端到房间（非阻塞，防止向已死房间注册）
+// Register 将客户端注册到房间。
+// 采用非阻塞方式，防止向已关闭的房间注册。
 func (r *Room) Register(client *Client) error {
 	select {
 	case r.register <- client:
-		return nil // 注册成功
+		return nil
 	case <-r.stopChan:
-		return ErrRoomClosed // 房间已关闭
+		return ErrRoomClosed
 	}
 }
 
-// Unregister 注销客户端（非阻塞）
+// Unregister 将客户端从房间注销（非阻塞）
 func (r *Room) Unregister(client *Client) {
 	select {
 	case r.unregister <- client:
 	case <-r.stopChan:
-		// 房间已关闭，不需要注销
+		// 房间已关闭，无需注销
 	}
 }
 
-// Broadcast 广播消息
+// Broadcast 向房间内广播消息
 func (r *Room) Broadcast(message []byte, sender *Client, isCritical bool) {
 	r.broadcast <- &RoomBroadcast{
 		Message:    message,
@@ -216,46 +215,45 @@ func (r *Room) Broadcast(message []byte, sender *Client, isCritical bool) {
 	}
 }
 
-// Stop 停止房间并阻塞等待刷盘完成（由 Hub 调用）
-// ⚠️ 这是一个阻塞调用，确保 "先刷盘，再从 Hub 移除" 的顺序
+// Stop 停止房间并阻塞等待刷盘完成。
+// 确保"先刷盘再移除"的顺序，由 Hub 调用。
 func (r *Room) Stop() {
 	r.countMu.Lock()
 	if r.stopping {
 		r.countMu.Unlock()
-		<-r.doneChan // 已经在停止中，等待完成
+		<-r.doneChan
 		return
 	}
 	r.stopping = true
 	r.countMu.Unlock()
 
-	close(r.stopChan) // 发送停止信号
-	<-r.doneChan      // ✅ 阻塞等待 run() 完全退出（包括 flushToDB）
+	close(r.stopChan)
+	<-r.doneChan
 }
 
-// StopWithReason 带原因的停止房间（页面被删除时调用）
-// reason: 通知客户端的错误码（如 PAGE_DELETED）
-// ⚠️ 这是一个阻塞调用，确保 "先刷盘，再从 Hub 移除" 的顺序
+// StopWithReason 带原因停止房间，用于页面删除场景。
+// 会先广播错误消息通知所有客户端。
 func (r *Room) StopWithReason(reason ErrorCode, message string) {
 	r.countMu.Lock()
 	if r.stopping {
 		r.countMu.Unlock()
-		<-r.doneChan // 已经在停止中，等待完成
+		<-r.doneChan
 		return
 	}
 	r.stopping = true
 	r.countMu.Unlock()
 
-	// 广播错误消息给所有客户端（最后一条消息）
+	// 广播错误消息给所有客户端
 	r.broadcastError(reason, message)
 
-	// 等一小段时间让消息发出去
+	// 等待消息发送
 	time.Sleep(100 * time.Millisecond)
 
-	close(r.stopChan) // 发送停止信号
-	<-r.doneChan      // ✅ 阻塞等待 run() 完全退出（包括 flushToDB）
+	close(r.stopChan)
+	<-r.doneChan
 }
 
-// broadcastError 广播错误消息给所有客户端
+// broadcastError 向所有客户端广播错误消息
 func (r *Room) broadcastError(code ErrorCode, message string) {
 	errPayload, _ := json.Marshal(ErrorPayload{
 		Code:    code,
@@ -269,15 +267,14 @@ func (r *Room) broadcastError(code ErrorCode, message string) {
 	}
 	data, _ := json.Marshal(msg)
 
-	// 直接发送到 broadcast channel
 	r.broadcast <- &RoomBroadcast{
 		Message:    data,
-		Sender:     nil, // 发给所有人
+		Sender:     nil,
 		IsCritical: true,
 	}
 }
 
-// ClientCount 返回当前客户端数量（供 Hub 双重检查）
+// ClientCount 返回当前客户端数量，供 Hub 双重检查使用
 func (r *Room) ClientCount() int {
 	r.countMu.RLock()
 	defer r.countMu.RUnlock()
@@ -291,16 +288,17 @@ func (r *Room) IsStopping() bool {
 	return r.stopping
 }
 
-// updateClientCount 更新客户端计数（供 run() 内部调用）
+// updateClientCount 更新客户端计数，供 run() 内部调用
 func (r *Room) updateClientCount(delta int) {
 	r.countMu.Lock()
 	r.clientCount += delta
 	r.countMu.Unlock()
 }
 
-// ========== 需要锁保护的状态操作 ==========
+// --- 需要锁保护的状态操作 ---
 
-// ApplyPatch 应用 Patch（需要锁保护 CurrentState）
+// ApplyPatch 应用 JSON Patch 到当前状态。
+// 包含版本检查，确保乐观锁机制生效。
 func (r *Room) ApplyPatch(patchBytes []byte, expectedVersion int64) error {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
@@ -325,7 +323,7 @@ func (r *Room) ApplyPatch(patchBytes []byte, expectedVersion int64) error {
 	r.CurrentState = modified
 	r.Version++
 
-	// 阈值刷盘
+	// 达到阈值时触发刷盘
 	if r.Version-r.lastPersistedVersion >= FlushThreshold {
 		go r.flushToDB("阈值触发")
 	}
@@ -333,7 +331,7 @@ func (r *Room) ApplyPatch(patchBytes []byte, expectedVersion int64) error {
 	return nil
 }
 
-// GetSnapshot 获取当前快照
+// GetSnapshot 获取当前状态快照，返回拷贝以保证并发安全
 func (r *Room) GetSnapshot() ([]byte, int64) {
 	r.stateMu.RLock()
 	defer r.stateMu.RUnlock()
@@ -344,7 +342,7 @@ func (r *Room) GetSnapshot() ([]byte, int64) {
 	return snapshot, r.Version
 }
 
-// flushToDB 刷盘
+// flushToDB 将当前状态持久化到数据库
 func (r *Room) flushToDB(reason string) {
 	r.stateMu.RLock()
 	if r.Version == r.lastPersistedVersion {
@@ -359,14 +357,14 @@ func (r *Room) flushToDB(reason string) {
 	r.stateMu.RUnlock()
 
 	if err := r.pageService.SavePageState(r.ID, snapshot, lastVersion, currentVersion); err != nil {
-		log.Printf("[Room %s] ⚠️ %s刷盘失败: %v", r.ID, reason, err)
+		log.Printf("[Room %s] %s刷盘失败: %v", r.ID, reason, err)
 		return
 	}
 
 	r.stateMu.Lock()
 	if currentVersion > r.lastPersistedVersion {
 		r.lastPersistedVersion = currentVersion
-		log.Printf("[Room %s] ✅ %s刷盘, 版本: %d → %d", r.ID, reason, lastVersion, currentVersion)
+		log.Printf("[Room %s] %s刷盘完成, 版本: %d -> %d", r.ID, reason, lastVersion, currentVersion)
 	}
 	r.stateMu.Unlock()
 }

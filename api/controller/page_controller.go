@@ -11,8 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ========== Response DTOs ==========
-// 使用强类型结构体代替 gin.H，便于文档化和类型检查
+// --- 响应结构定义 ---
 
 // PageResponse 页面响应结构
 type PageResponse struct {
@@ -33,14 +32,14 @@ type MessageResponse struct {
 	PageID  string `json:"pageId,omitempty"`
 }
 
-// ========== Controller ==========
+// --- 控制器定义 ---
 
-// PageController 页面相关的 HTTP 控制器
+// PageController 页面 HTTP 控制器
 type PageController struct {
 	pageUseCase *usecase.PageUseCase
 }
 
-// NewPageController 构造函数
+// NewPageController 创建 PageController 实例
 func NewPageController(pageUseCase *usecase.PageUseCase) *PageController {
 	return &PageController{pageUseCase: pageUseCase}
 }
@@ -88,7 +87,6 @@ func (pc *PageController) CreatePage(c *gin.Context) {
 		return
 	}
 
-	// 从 Clerk 中间件获取用户 ID（使用常量避免魔法字符串）
 	userID, exists := c.Get(middleware.ContextKeyUserID)
 	if !exists {
 		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "未获取到用户信息"})
@@ -97,7 +95,6 @@ func (pc *PageController) CreatePage(c *gin.Context) {
 
 	page, err := pc.pageUseCase.CreatePage(req.PageID, userID.(string))
 	if err != nil {
-		// 使用 errors.Is 判断业务错误类型，而非字符串匹配
 		if errors.Is(err, domainErrors.ErrPageAlreadyExists) {
 			c.JSON(http.StatusConflict, ErrorResponse{Error: "页面已存在"})
 			return
@@ -115,7 +112,7 @@ func (pc *PageController) CreatePage(c *gin.Context) {
 
 // DeletePage 删除页面
 // DELETE /api/pages/:pageId
-// ⚠️ 危险操作：会强制关闭协同编辑房间，踢出所有在线用户
+// 注意：此操作会强制关闭协同编辑房间，踢出所有在线用户
 func (pc *PageController) DeletePage(c *gin.Context) {
 	pageID := c.Param("pageId")
 	if pageID == "" {
@@ -123,16 +120,13 @@ func (pc *PageController) DeletePage(c *gin.Context) {
 		return
 	}
 
-	// 从 Clerk 中间件获取用户 ID（使用常量避免魔法字符串）
 	userID, exists := c.Get(middleware.ContextKeyUserID)
 	if !exists {
 		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "未获取到用户信息"})
 		return
 	}
 
-	// 调用 UseCase，权限检查在业务层进行
 	if err := pc.pageUseCase.DeletePage(pageID, userID.(string)); err != nil {
-		// 使用 errors.Is 判断业务错误类型
 		switch {
 		case errors.Is(err, domainErrors.ErrPageNotFound):
 			c.JSON(http.StatusNotFound, ErrorResponse{Error: "页面不存在"})

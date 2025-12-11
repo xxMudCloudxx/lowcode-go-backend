@@ -23,12 +23,12 @@ func main() {
 
 	// 加载环境变量
 	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️ 未找到 .env 文件，使用系统环境变量")
+		log.Println("[ClearDB] 未找到 .env 文件，使用系统环境变量")
 	}
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Fatal("❌ DATABASE_URL 环境变量未设置")
+		log.Fatal("[ClearDB] DATABASE_URL 环境变量未设置")
 	}
 
 	// 连接数据库
@@ -36,8 +36,8 @@ func main() {
 
 	// 确认提示
 	if !*force {
-		fmt.Println("⚠️  警告：此操作将删除数据库中的所有数据！")
-		fmt.Println("📊 受影响的表：")
+		fmt.Println("警告：此操作将删除数据库中的所有数据！")
+		fmt.Println("受影响的表：")
 
 		targetTables := getAllTables()
 		if *tables != "" {
@@ -53,13 +53,13 @@ func main() {
 		input = strings.TrimSpace(strings.ToLower(input))
 
 		if input != "yes" && input != "y" {
-			fmt.Println("❌ 操作已取消")
+			fmt.Println("操作已取消")
 			return
 		}
 	}
 
 	// 执行清库
-	fmt.Println("\n🚀 开始清库...")
+	fmt.Println("\n开始清库...")
 
 	targetTables := getAllTables()
 	if *tables != "" {
@@ -69,26 +69,23 @@ func main() {
 	for _, tableName := range targetTables {
 		var err error
 		if *truncate {
-			// TRUNCATE 更快，会重置自增ID
-			// CASCADE 处理外键约束
 			err = db.Exec(fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE", tableName)).Error
 		} else {
-			// DELETE 可以触发触发器，但较慢
 			err = db.Exec(fmt.Sprintf("DELETE FROM %s", tableName)).Error
 		}
 
 		if err != nil {
-			log.Printf("❌ 清空表 %s 失败: %v\n", tableName, err)
+			log.Printf("[ClearDB] 清空表 %s 失败: %v\n", tableName, err)
 		} else {
-			log.Printf("✅ 已清空表: %s\n", tableName)
+			log.Printf("[ClearDB] 已清空表: %s\n", tableName)
 		}
 	}
 
-	fmt.Println("\n🎉 清库操作完成！")
+	fmt.Println("\n清库操作完成！")
 }
 
 // getAllTables 返回所有需要清空的表名
-// 注意：顺序很重要！先删除有外键依赖的表（pages），再删除被依赖的表（users）
+// 注意：顺序很重要！先删除有外键依赖的表
 func getAllTables() []string {
 	return []string{
 		getTableName(&entity.Page{}),

@@ -20,17 +20,16 @@ type WSHandler struct {
 	upgrader websocket.Upgrader
 }
 
-// NewWSHandler 构造函数
+// NewWSHandler 创建 WSHandler 实例
 func NewWSHandler(hub *ws.Hub, allowedOrigins []string) *WSHandler {
 	return &WSHandler{
 		hub: hub,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
-			// 配置 CORS
 			CheckOrigin: func(r *http.Request) bool {
 				origin := r.Header.Get("Origin")
-				// 开发环境允许所有
+				// 开发环境允许 localhost
 				if origin == "" || strings.HasPrefix(origin, "http://localhost") {
 					return true
 				}
@@ -40,7 +39,7 @@ func NewWSHandler(hub *ws.Hub, allowedOrigins []string) *WSHandler {
 						return true
 					}
 				}
-				log.Printf("[WS] ⚠️ 拒绝来自 %s 的连接", origin)
+				log.Printf("[WS] 拒绝来自 %s 的连接", origin)
 				return false
 			},
 		},
@@ -49,7 +48,7 @@ func NewWSHandler(hub *ws.Hub, allowedOrigins []string) *WSHandler {
 
 // HandleWS 处理 WebSocket 升级请求
 // GET /ws?pageId=xxx
-// ⚠️ 需要在 URL 查询参数或 Sec-WebSocket-Protocol 中携带 JWT Token
+// 需要在 URL 查询参数或 Sec-WebSocket-Protocol 中携带 JWT Token
 func (h *WSHandler) HandleWS(c *gin.Context) {
 	pageID := c.Query("pageId")
 	if pageID == "" {
@@ -57,10 +56,9 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 		return
 	}
 
-	// 1. 验证 JWT Token（从 URL 参数获取，因为 WebSocket 不支持自定义 Header）
+	// 获取 JWT Token（WebSocket 不支持自定义 Header，从 URL 参数获取）
 	token := c.Query("token")
 	if token == "" {
-		// 也尝试从 Sec-WebSocket-Protocol 获取（某些客户端实现）
 		token = c.GetHeader("Sec-WebSocket-Protocol")
 	}
 
@@ -69,29 +67,28 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 		return
 	}
 
-	// 2. 验证 Clerk JWT
+	// 验证 Clerk JWT
 	claims, err := jwt.Verify(c.Request.Context(), &jwt.VerifyParams{
 		Token: token,
 	})
 	if err != nil {
-		log.Printf("[WS] ❌ Token 验证失败: %v", err)
+		log.Printf("[WS] Token 验证失败: %v", err)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token 无效", "details": err.Error()})
 		return
 	}
 
-	// 3. 获取或创建房间（会验证页面存在性）
+	// 获取或创建房间
 	room, err := h.hub.GetOrCreateRoom(pageID)
 	if err != nil {
 		if errors.Is(err, domainErrors.ErrPageNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "页面不存在"})
 			return
 		}
-		// ⚠️ 房间正在关闭，让客户端重试
 		if errors.Is(err, domainErrors.ErrRoomClosing) {
-			c.Header("Retry-After", "0.1") // 100ms 后重试
+			c.Header("Retry-After", "0.1")
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error":      "房间正在关闭，请稍后重试",
-				"retryAfter": 100, // 毫秒
+				"retryAfter": 100,
 			})
 			return
 		}
@@ -99,39 +96,37 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 		return
 	}
 
-	// 4. 升级为 WebSocket 连接
+	// 升级为 WebSocket 连接
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("[WS] ❌ 升级 WebSocket 失败: %v", err)
+		log.Printf("[WS] 升级 WebSocket 失败: %v", err)
 		return
 	}
 
-	// 5. 创建客户端并注册到房间
+	// 创建客户端并注册到房间
 	userInfo := ws.UserInfo{
 		UserID:   claims.Subject,
-		UserName: claims.Subject, // TODO: 可以从 Clerk 获取用户名
+		UserName: claims.Subject, // TODO: 从 Clerk 获取用户名
 		Color:    generateUserColor(claims.Subject),
 	}
 
 	client := ws.NewClient(h.hub, conn, pageID, userInfo)
 
-	// 注册到房间
 	if err := room.Register(client); err != nil {
-		log.Printf("[WS] ❌ 注册客户端失败: %v", err)
+		log.Printf("[WS] 注册客户端失败: %v", err)
 		conn.Close()
 		return
 	}
 
-	log.Printf("[WS] ✅ 用户 [%s] 连接到页面 [%s]", userInfo.UserID, pageID)
+	log.Printf("[WS] 用户 [%s] 连接到页面 [%s]", userInfo.UserID, pageID)
 
-	// 6. 启动读写协程
+	// 启动读写协程
 	go client.WritePump()
 	go client.ReadPump()
 }
 
 // generateUserColor 根据用户 ID 生成协作光标颜色
 func generateUserColor(userID string) string {
-	// 使用用户 ID 的哈希值生成一致的颜色
 	colors := []string{
 		"#FF6B6B", // 红色
 		"#4ECDC4", // 青色
@@ -143,7 +138,6 @@ func generateUserColor(userID string) string {
 		"#F7DC6F", // 金色
 	}
 
-	// 简单哈希
 	hash := 0
 	for _, c := range userID {
 		hash = hash*31 + int(c)

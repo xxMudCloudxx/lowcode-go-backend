@@ -7,10 +7,9 @@ import (
 	"gorm.io/datatypes"
 )
 
-// ================= Schema 结构定义 =================
+// --- Schema 结构定义 ---
 
-// PageSchema 页面 Schema 的完整结构
-// Schema 是存储在数据库 JSONB 字段中的数据结构
+// PageSchema 页面 Schema 结构，存储在数据库 JSONB 字段中
 type PageSchema struct {
 	RootID     int64                `json:"rootId"`
 	Components map[string]Component `json:"components"`
@@ -28,7 +27,6 @@ type Component struct {
 }
 
 // NewDefaultSchema 创建默认的空白 Schema
-// ⚠️ 使用强类型结构体初始化，避免硬编码 JSON 字符串
 func NewDefaultSchema() *PageSchema {
 	rootID := int64(1)
 	return &PageSchema{
@@ -47,20 +45,20 @@ func NewDefaultSchema() *PageSchema {
 	}
 }
 
-// MarshalJSON 将 Schema 序列化为 JSON bytes
+// MarshalJSON 实现 JSON 序列化
 func (s *PageSchema) MarshalJSON() ([]byte, error) {
 	type Alias PageSchema
 	return json.Marshal((*Alias)(s))
 }
 
-// ToBytes 将 Schema 序列化为 []byte，便于存储
+// ToBytes 将 Schema 序列化为 []byte
 func (s *PageSchema) ToBytes() ([]byte, error) {
 	return json.Marshal(s)
 }
 
-// ================= Page 数据库模型 =================
+// --- Page 数据库模型 ---
 
-// Page 数据库模型 (PostgreSQL JSONB)
+// Page 页面数据库模型
 type Page struct {
 	ID        uint           `gorm:"primaryKey"`
 	PageID    string         `gorm:"uniqueIndex;size:64"`

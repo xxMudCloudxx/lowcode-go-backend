@@ -20,7 +20,7 @@ type WebhookController struct {
 	webhookSecret string
 }
 
-// NewWebhookController 构造函数
+// NewWebhookController 创建 WebhookController 实例
 func NewWebhookController(userRepo domainRepo.UserRepository, webhookSecret string) *WebhookController {
 	return &WebhookController{
 		userRepo:      userRepo,
@@ -49,19 +49,19 @@ type ClerkUserData struct {
 // POST /webhook/clerk
 // 处理 user.created, user.updated, user.deleted 事件
 func (wc *WebhookController) HandleClerkWebhook(c *gin.Context) {
-	// 1. 读取请求体
+	// 读取请求体
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		log.Printf("[Webhook] ❌ 读取请求体失败: %v", err)
+		log.Printf("[Webhook] 读取请求体失败: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无法读取请求体"})
 		return
 	}
 
-	// 2. 验证 Webhook 签名（使用 Svix SDK）
+	// 验证 Webhook 签名
 	if wc.webhookSecret != "" {
 		wh, err := svix.NewWebhook(wc.webhookSecret)
 		if err != nil {
-			log.Printf("[Webhook] ❌ 初始化 Webhook 验证器失败: %v", err)
+			log.Printf("[Webhook] 初始化 Webhook 验证器失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Webhook 配置错误"})
 			return
 		}
@@ -72,32 +72,32 @@ func (wc *WebhookController) HandleClerkWebhook(c *gin.Context) {
 		headers.Set("svix-signature", c.GetHeader("svix-signature"))
 
 		if err := wh.Verify(body, headers); err != nil {
-			log.Printf("[Webhook] ❌ 签名验证失败: %v", err)
+			log.Printf("[Webhook] 签名验证失败: %v", err)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "签名验证失败"})
 			return
 		}
 	} else {
-		log.Println("[Webhook] ⚠️ 未配置 CLERK_WEBHOOK_SECRET，跳过签名验证（仅限开发环境）")
+		log.Println("[Webhook] 警告: 未配置 CLERK_WEBHOOK_SECRET，跳过签名验证（仅限开发环境）")
 	}
 
-	// 3. 解析事件
+	// 解析事件
 	var payload ClerkWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		log.Printf("[Webhook] ❌ 解析 Webhook 失败: %v", err)
+		log.Printf("[Webhook] 解析 Webhook 失败: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 JSON 格式"})
 		return
 	}
 
-	log.Printf("[Webhook] 📥 收到事件: %s", payload.Type)
+	log.Printf("[Webhook] 收到事件: %s", payload.Type)
 
-	// 4. 根据事件类型处理
+	// 根据事件类型处理
 	switch payload.Type {
 	case "user.created", "user.updated":
 		wc.handleUserUpsert(payload.Data)
 	case "user.deleted":
 		wc.handleUserDeleted(payload.Data)
 	default:
-		log.Printf("[Webhook] ℹ️ 忽略事件: %s", payload.Type)
+		log.Printf("[Webhook] 忽略事件: %s", payload.Type)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"received": true})
@@ -107,7 +107,7 @@ func (wc *WebhookController) HandleClerkWebhook(c *gin.Context) {
 func (wc *WebhookController) handleUserUpsert(data json.RawMessage) {
 	var userData ClerkUserData
 	if err := json.Unmarshal(data, &userData); err != nil {
-		log.Printf("[Webhook] ❌ 解析用户数据失败: %v", err)
+		log.Printf("[Webhook] 解析用户数据失败: %v", err)
 		return
 	}
 
@@ -136,11 +136,11 @@ func (wc *WebhookController) handleUserUpsert(data json.RawMessage) {
 	}
 
 	if err := wc.userRepo.Upsert(user); err != nil {
-		log.Printf("[Webhook] ❌ 用户 Upsert 失败: %v", err)
+		log.Printf("[Webhook] 用户 Upsert 失败: %v", err)
 		return
 	}
 
-	log.Printf("[Webhook] ✅ 用户同步成功: %s (%s)", user.ID, user.Email)
+	log.Printf("[Webhook] 用户同步成功: %s (%s)", user.ID, user.Email)
 }
 
 // handleUserDeleted 处理用户删除事件
@@ -149,10 +149,10 @@ func (wc *WebhookController) handleUserDeleted(data json.RawMessage) {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(data, &userData); err != nil {
-		log.Printf("[Webhook] ❌ 解析删除事件数据失败: %v", err)
+		log.Printf("[Webhook] 解析删除事件数据失败: %v", err)
 		return
 	}
 
 	// TODO: 实现用户删除逻辑（可能需要级联删除用户的页面）
-	log.Printf("[Webhook] ℹ️ 用户删除事件: %s（暂未实现删除逻辑）", userData.ID)
+	log.Printf("[Webhook] 用户删除事件: %s（暂未实现删除逻辑）", userData.ID)
 }

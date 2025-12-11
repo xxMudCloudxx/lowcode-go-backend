@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Dependencies 依赖注入结构
+// Dependencies 路由依赖注入结构
 type Dependencies struct {
 	PageController    *controller.PageController
 	WSHandler         *controller.WSHandler
@@ -16,7 +16,7 @@ type Dependencies struct {
 
 // Setup 配置所有路由
 func Setup(router *gin.Engine, deps *Dependencies) {
-	// ========== 公开路由 ==========
+	// --- 公开路由 ---
 
 	// 健康检查
 	router.GET("/health", func(c *gin.Context) {
@@ -29,11 +29,11 @@ func Setup(router *gin.Engine, deps *Dependencies) {
 	// Clerk Webhook（使用签名验证，不使用 JWT）
 	router.POST("/webhook/clerk", deps.WebhookController.HandleClerkWebhook)
 
-	// ========== WebSocket 路由 ==========
-	// WebSocket 自行在 Handler 中验证 Token（因为 WebSocket 不支持自定义 Header）
+	// --- WebSocket 路由 ---
+	// WebSocket 自行在 Handler 中验证 Token
 	router.GET("/ws", deps.WSHandler.HandleWS)
 
-	// ========== API 路由（需要 Clerk JWT 认证）==========
+	// --- API 路由（需要 Clerk JWT 认证）---
 	api := router.Group("/api")
 	api.Use(middleware.ClerkAuth())
 	{

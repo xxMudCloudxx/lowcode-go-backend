@@ -21,40 +21,38 @@ import (
 )
 
 func main() {
-	log.Println("🚀 LowCode Go Server 启动中...")
+	log.Println("[Server] LowCode Go Server 启动中...")
 
-	// ========== 1. 加载环境变量 ==========
+	// 加载环境变量
 	env := bootstrap.LoadEnv()
 
-	// ========== 2. 初始化 Clerk ==========
+	// 初始化 Clerk
 	bootstrap.InitClerk()
 
-	// ========== 3. 连接数据库 ==========
+	// 连接数据库
 	db := bootstrap.NewDatabase(env.DatabaseURL)
 
-	// ========== 4. 依赖注入 ==========
-	// Repository 层
+	// 依赖注入 - Repository 层
 	pageRepo := repository.NewPageRepository(db)
 	userRepo := repository.NewUserRepository(db)
 
-	// WebSocket Hub（需要 PageService 接口，pageRepo 实现了它）
-	// 类型断言：pageRepo 同时实现了 domain.PageRepository 和 ws.PageService
+	// WebSocket Hub
 	hub := ws.NewHub(pageRepo.(ws.PageService))
 
-	// UseCase 层
+	// 依赖注入 - UseCase 层
 	pageUseCase := usecase.NewPageUseCase(pageRepo, hub)
 
-	// Controller 层
+	// 依赖注入 - Controller 层
 	pageController := controller.NewPageController(pageUseCase)
 	wsHandler := controller.NewWSHandler(hub, []string{
-		"https://xxmudcloudxx.github.io", // 生产环境前端
+		"https://xxmudcloudxx.github.io",
 	})
 	webhookController := controller.NewWebhookController(userRepo, env.WebhookSecret)
 
-	// ========== 5. 启动 Hub 事件循环 ==========
+	// 启动 Hub 事件循环
 	go hub.Run()
 
-	// ========== 6. 配置 Gin 路由 ==========
+	// 配置 Gin 路由
 	router := gin.Default()
 
 	// CORS 配置
@@ -74,16 +72,15 @@ func main() {
 		WebhookController: webhookController,
 	})
 
-	// ========== 7. 启动 HTTP 服务 ==========
+	// 启动 HTTP 服务
 	srv := &http.Server{
 		Addr:    ":" + env.Port,
 		Handler: router,
 	}
 
-	// 在 goroutine 中启动服务，主线程等待中断信号
 	go func() {
-		log.Printf("✅ 服务已启动: http://localhost:%s", env.Port)
-		log.Printf("📖 API 文档:")
+		log.Printf("[Server] 服务已启动: http://localhost:%s", env.Port)
+		log.Printf("[Server] API 端点:")
 		log.Printf("   GET  /health              - 健康检查")
 		log.Printf("   GET  /api/pages/:pageId   - 获取页面")
 		log.Printf("   POST /api/pages           - 创建页面")
@@ -92,28 +89,23 @@ func main() {
 		log.Printf("   POST /webhook/clerk       - Clerk Webhook")
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("❌ 服务启动失败: %v", err)
+			log.Fatalf("[Server] 服务启动失败: %v", err)
 		}
 	}()
 
-	// ========== 8. 优雅停机 ==========
+	// 优雅停机
 	quit := make(chan os.Signal, 1)
-	// 监听 SIGINT (Ctrl+C) 和 SIGTERM (容器停止)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("🛑 收到停机信号，正在优雅关闭...")
+	log.Println("[Server] 收到停机信号，正在优雅关闭...")
 
-	// 给 5 秒时间处理剩余请求
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("❌ 服务强制关闭: %v", err)
+		log.Fatalf("[Server] 服务强制关闭: %v", err)
 	}
 
-	// Hub 和 Room 的清理会在 srv.Shutdown 后自动触发
-	// Room.Stop() 会调用 flushToDB，确保数据不丢失
-
-	log.Println("✅ 服务已安全停止")
+	log.Println("[Server] 服务已安全停止")
 }
