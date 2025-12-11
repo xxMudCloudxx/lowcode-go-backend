@@ -66,6 +66,20 @@ func (uc *PageUseCase) CreatePage(pageID, creatorID string) (*entity.Page, error
 	return page, nil
 }
 
+// DeletePage 删除页面
+// ⚠️ 实现"先杀人，后毁尸"的安全删除流程：
+// 1. 先斩：强制关闭内存中的协同房间（通知所有在线用户）
+// 2. 后奏：删除数据库记录
+func (uc *PageUseCase) DeletePage(pageID string) error {
+	// 1. 先斩：强制关闭内存中的协同房间
+	// 这一步必须在删库之前，防止新的写入
+	// Hub.CloseRoom 会广播 PAGE_DELETED 消息给所有在线用户
+	uc.hub.CloseRoom(pageID)
+
+	// 2. 后奏：删除数据库记录
+	return uc.repo.Delete(pageID)
+}
+
 // ⚠️ SavePage 方法已删除
 // 在协同编辑系统中，禁止使用全量 Save，它会覆盖 schema 和 version
 // 如需更新元数据（标题、描述），应使用专门的 UpdateMeta 方法

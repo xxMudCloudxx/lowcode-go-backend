@@ -221,6 +221,44 @@ func (r *Room) Stop() {
 	close(r.stopChan)
 }
 
+// StopWithReason 带原因的停止房间（页面被删除时调用）
+// reason: 通知客户端的错误码（如 PAGE_DELETED）
+func (r *Room) StopWithReason(reason ErrorCode, message string) {
+	r.countMu.Lock()
+	r.stopping = true
+	r.countMu.Unlock()
+
+	// 广播错误消息给所有客户端（最后一条消息）
+	r.broadcastError(reason, message)
+
+	// 等一小段时间让消息发出去
+	time.Sleep(100 * time.Millisecond)
+
+	close(r.stopChan)
+}
+
+// broadcastError 广播错误消息给所有客户端
+func (r *Room) broadcastError(code ErrorCode, message string) {
+	errPayload, _ := json.Marshal(ErrorPayload{
+		Code:    code,
+		Message: message,
+	})
+	msg := WSMessage{
+		Type:      TypeError,
+		SenderID:  "server",
+		Payload:   errPayload,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	data, _ := json.Marshal(msg)
+
+	// 直接发送到 broadcast channel
+	r.broadcast <- &RoomBroadcast{
+		Message:    data,
+		Sender:     nil, // 发给所有人
+		IsCritical: true,
+	}
+}
+
 // ClientCount 返回当前客户端数量（供 Hub 双重检查）
 func (r *Room) ClientCount() int {
 	r.countMu.RLock()

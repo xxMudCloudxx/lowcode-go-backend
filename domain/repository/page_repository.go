@@ -15,4 +15,8 @@ type PageRepository interface {
 	// newVersion: 要写入的新版本号（允许跳跃）
 	// 如果数据库中的版本与 oldVersion 不匹配，返回 ErrOptimisticLock
 	UpdateSchema(pageID string, schema []byte, oldVersion, newVersion int64) error
+
+	// Delete 删除页面
+	// ⚠️ 注意：删除前必须先通过 Hub.CloseRoom 关闭内存中的协同房间
+	Delete(pageID string) error
 }

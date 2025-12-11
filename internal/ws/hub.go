@@ -137,3 +137,25 @@ func (h *Hub) GetOrCreateRoom(roomID string) (*Room, error) {
 func (h *Hub) NotifyIdle(room *Room) {
 	h.idleRoom <- room
 }
+
+// CloseRoom 强制关闭房间（供 API 删除页面时调用）
+// ⚠️ 这是流程的第一步：先关闭房间，后删数据库
+func (h *Hub) CloseRoom(roomID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	room, exists := h.rooms[roomID]
+	if !exists {
+		log.Printf("[Hub] ℹ️ 房间 %s 不存在于内存中，无需关闭", roomID)
+		return
+	}
+
+	// 1. 先从 Hub 目录中移除（防止新用户加入）
+	delete(h.rooms, roomID)
+
+	// 2. 通知房间内所有用户，页面已被删除
+	// 使用 StopWithReason 发送 PAGE_DELETED 错误，让前端显示友好提示
+	room.StopWithReason(ErrPageDeleted, "页面已被删除")
+
+	log.Printf("[Hub] 💀 强制关闭房间 %s（页面被删除）", roomID)
+}

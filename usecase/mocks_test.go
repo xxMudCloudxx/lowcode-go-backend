@@ -32,6 +32,11 @@ func (m *MockPageRepository) UpdateSchema(pageID string, schema []byte, oldVersi
 	return args.Error(0)
 }
 
+func (m *MockPageRepository) Delete(pageID string) error {
+	args := m.Called(pageID)
+	return args.Error(0)
+}
+
 // ========== MockPageService (用于 Hub) ==========
 // 因为 PageUseCase 需要真实的 Hub，而 Hub 需要 PageService
 

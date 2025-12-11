@@ -100,3 +100,9 @@ func (r *pageRepository) PageExists(pageID string) (bool, error) {
 func (r *pageRepository) SavePageState(pageID string, state []byte, oldVersion, newVersion int64) error {
 	return r.UpdateSchema(pageID, state, oldVersion, newVersion)
 }
+
+// Delete 删除页面（供 Controller 使用）
+// ⚠️ 调用此方法前，必须先调用 Hub.CloseRoom 关闭内存中的协同房间
+func (r *pageRepository) Delete(pageID string) error {
+	return r.db.Where("page_id = ?", pageID).Delete(&entity.Page{}).Error
+}

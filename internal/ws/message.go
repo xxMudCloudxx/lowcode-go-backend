@@ -51,6 +51,7 @@ const (
 	ErrRoomNotFound    ErrorCode = "ROOM_NOT_FOUND"   // 房间不存在
 	ErrUnauthorized    ErrorCode = "UNAUTHORIZED"     // 未授权
 	ErrInternalError   ErrorCode = "INTERNAL_ERROR"   // 服务器内部错误
+	ErrPageDeleted     ErrorCode = "PAGE_DELETED"     // 页面已被删除（房间被强制关闭）
 )
 
 // ErrorPayload 错误消息的 payload 结构
