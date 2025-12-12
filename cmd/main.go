@@ -40,7 +40,7 @@ func main() {
 	hub := ws.NewHub(pageRepo.(ws.PageService))
 
 	// 依赖注入 - UseCase 层
-	pageUseCase := usecase.NewPageUseCase(pageRepo, hub)
+	pageUseCase := usecase.NewPageUseCase(pageRepo, userRepo, hub)
 
 	// 依赖注入 - Controller 层
 	pageController := controller.NewPageController(pageUseCase)

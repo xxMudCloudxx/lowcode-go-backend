@@ -1,6 +1,8 @@
 package usecase
 
 import (
+	"time"
+
 	"lowercode-go-server/domain/entity"
 	domainErrors "lowercode-go-server/domain/errors"
 	"lowercode-go-server/domain/repository"
@@ -10,17 +12,15 @@ import (
 )
 
 // PageUseCase 页面业务逻辑层
-// 注入 Hub 解决"数据双源"问题：
-//   - 有协同编辑时，内存是 source of truth
-//   - 无协同编辑时，数据库是 source of truth
 type PageUseCase struct {
-	repo repository.PageRepository
-	hub  *ws.Hub
+	repo     repository.PageRepository
+	userRepo repository.UserRepository
+	hub      *ws.Hub
 }
 
 // NewPageUseCase 创建 PageUseCase 实例
-func NewPageUseCase(repo repository.PageRepository, hub *ws.Hub) *PageUseCase {
-	return &PageUseCase{repo: repo, hub: hub}
+func NewPageUseCase(repo repository.PageRepository, userRepo repository.UserRepository, hub *ws.Hub) *PageUseCase {
+	return &PageUseCase{repo: repo, userRepo: userRepo, hub: hub}
 }
 
 // GetPage 获取页面
@@ -42,11 +42,21 @@ func (uc *PageUseCase) GetPage(pageID string) (*entity.Page, error) {
 }
 
 // CreatePage 创建新页面
-func (uc *PageUseCase) CreatePage(pageID, creatorID string) (*entity.Page, error) {
-	defaultSchema := entity.NewDefaultSchema()
-	schemaBytes, err := defaultSchema.ToBytes()
-	if err != nil {
+// schemaBytes 可选，为 nil 时使用默认空白 schema
+func (uc *PageUseCase) CreatePage(pageID, creatorID string, schemaBytes []byte) (*entity.Page, error) {
+	// 确保用户存在（解决外键约束问题）
+	if err := uc.ensureUserExists(creatorID); err != nil {
 		return nil, err
+	}
+
+	// 如果没有传入 schema，使用默认 schema
+	if schemaBytes == nil {
+		defaultSchema := entity.NewDefaultSchema()
+		var err error
+		schemaBytes, err = defaultSchema.ToBytes()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	page := &entity.Page{
@@ -60,6 +70,32 @@ func (uc *PageUseCase) CreatePage(pageID, creatorID string) (*entity.Page, error
 		return nil, err
 	}
 	return page, nil
+}
+
+// ensureUserExists 确保用户存在，不存在则创建
+func (uc *PageUseCase) ensureUserExists(userID string) error {
+	user, err := uc.userRepo.GetByID(userID)
+	if err != nil {
+		return err
+	}
+
+	// 用户已存在
+	if user != nil {
+		return nil
+	}
+
+	// 用户不存在，创建占位记录
+	// 后续 Clerk Webhook 会更新用户信息
+	newUser := &entity.User{
+		ID:        userID,
+		Email:     "",
+		Name:      "Unknown User",
+		AvatarURL: "",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	return uc.userRepo.Upsert(newUser)
 }
 
 // DeletePage 删除页面
@@ -88,7 +124,3 @@ func (uc *PageUseCase) DeletePage(pageID, operatorID string) error {
 	// 删除数据库记录
 	return uc.repo.Delete(pageID)
 }
-
-// 注意：SavePage 方法已删除
-// 在协同编辑系统中，禁止使用全量 Save，它会覆盖 schema 和 version。
-// 如需更新元数据，应使用专门的 UpdateMeta 方法。

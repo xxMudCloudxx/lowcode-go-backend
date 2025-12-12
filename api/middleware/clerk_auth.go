@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -13,10 +14,18 @@ func ClerkAuth() gin.HandlerFunc {
 		// 1. 获取 Token (支持 Bearer Token)
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
+			log.Printf("[Auth] 请求缺少 Authorization 头, Path: %s", c.Request.URL.Path)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "缺少 Authorization 头"})
 			return
 		}
+
 		token := strings.TrimPrefix(authHeader, "Bearer ")
+		// 打印 token 的前 20 个字符用于调试（不打印完整 token 以保护安全）
+		tokenPreview := token
+		if len(token) > 20 {
+			tokenPreview = token[:20] + "..."
+		}
+		log.Printf("[Auth] 收到 Token: %s, Path: %s", tokenPreview, c.Request.URL.Path)
 
 		// 2. 验证 Token (核心)
 		// Clerk SDK 会自动拉取公钥并验证签名、过期时间
@@ -24,6 +33,7 @@ func ClerkAuth() gin.HandlerFunc {
 			Token: token,
 		})
 		if err != nil {
+			log.Printf("[Auth] Token 验证失败: %v", err)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Token 无效", "details": err.Error()})
 			return
 		}

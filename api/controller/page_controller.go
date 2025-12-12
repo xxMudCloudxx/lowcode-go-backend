@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -74,12 +75,14 @@ func (pc *PageController) GetPage(c *gin.Context) {
 
 // CreatePageRequest 创建页面请求结构
 type CreatePageRequest struct {
-	PageID string `json:"pageId" binding:"required"`
+	PageID string      `json:"pageId" binding:"required"`
+	Schema interface{} `json:"schema"` // 可选，传入初始 schema
 }
 
 // CreatePage 创建新页面
 // POST /api/pages
-// 请求体: { "pageId": "xxx" }
+// 请求体: { "pageId": "xxx", "schema": {...} }
+// schema 可选，不传则使用默认空白 schema
 func (pc *PageController) CreatePage(c *gin.Context) {
 	var req CreatePageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -93,7 +96,18 @@ func (pc *PageController) CreatePage(c *gin.Context) {
 		return
 	}
 
-	page, err := pc.pageUseCase.CreatePage(req.PageID, userID.(string))
+	// 将 schema 转换为 []byte
+	var schemaBytes []byte
+	if req.Schema != nil {
+		var err error
+		schemaBytes, err = json.Marshal(req.Schema)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "schema 格式无效"})
+			return
+		}
+	}
+
+	page, err := pc.pageUseCase.CreatePage(req.PageID, userID.(string), schemaBytes)
 	if err != nil {
 		if errors.Is(err, domainErrors.ErrPageAlreadyExists) {
 			c.JSON(http.StatusConflict, ErrorResponse{Error: "页面已存在"})
