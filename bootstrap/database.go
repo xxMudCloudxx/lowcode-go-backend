@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"log"
+	"os"
 	"time"
 
 	"lowercode-go-server/domain/entity"
@@ -14,8 +15,14 @@ import (
 // NewDatabase 创建并配置 PostgreSQL 数据库连接
 // dsn 格式: postgres://user:password@localhost:5432/dbname?sslmode=disable
 func NewDatabase(dsn string) *gorm.DB {
+	// 根据环境设置日志级别
+	logLevel := logger.Info
+	if os.Getenv("GIN_MODE") == "release" {
+		logLevel = logger.Warn // 生产环境只记录警告和错误
+	}
+
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logLevel),
 	})
 	if err != nil {
 		log.Fatalf("数据库连接失败: %v", err)
