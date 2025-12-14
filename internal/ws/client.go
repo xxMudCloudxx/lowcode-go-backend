@@ -111,6 +111,8 @@ func (c *Client) ReadPump() {
 			c.handleOpPatch(message)
 		case TypeCursorMove:
 			c.handleCursorMove(message)
+		case TypeSelectionChange:
+			c.handleSelectionChange(message)
 		}
 	}
 }
@@ -158,9 +160,80 @@ func (c *Client) handleOpPatch(message []byte) {
 // handleCursorMove 处理光标移动消息
 // 光标是非关键消息，阻塞时静默跳过
 func (c *Client) handleCursorMove(message []byte) {
-	if c.Room != nil {
-		c.Room.Broadcast(message, c, false)
+	if c.Room == nil {
+		return
 	}
+
+	var wsMsg WSMessage
+	json.Unmarshal(message, &wsMsg)
+
+	var payload struct {
+		CursorX float64 `json:"cursorX"`
+		CursorY float64 `json:"cursorY"`
+	}
+	json.Unmarshal(wsMsg.Payload, &payload)
+
+	// 使用指针字段进行部分更新（不会覆盖 SelectedComponentID）
+	x, y := payload.CursorX, payload.CursorY
+	update := &ClientStateUpdate{
+		Client:  c,
+		CursorX: &x,
+		CursorY: &y,
+		// SelectedComponentID 保持 nil，表示不修改
+	}
+
+	// 非阻塞发送：光标位置丢失一两帧没关系，避免阻塞读协程
+	select {
+	case c.Room.stateUpdate <- update:
+	default:
+		// 通道满，丢弃本次光标位置更新
+	}
+
+	// 重建消息，确保 SenderID 来自服务端已认证的用户信息
+	broadcastMsg := WSMessage{
+		Type:      TypeCursorMove,
+		SenderID:  c.UserInfo.UserID, // 使用服务端可信的 UserID
+		Payload:   wsMsg.Payload,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	data, _ := json.Marshal(broadcastMsg)
+	c.Room.Broadcast(data, c, false)
+}
+
+// handleSelectionChange 处理组件选中变更消息
+func (c *Client) handleSelectionChange(message []byte) {
+	if c.Room == nil {
+		return
+	}
+
+	var wsMsg WSMessage
+	json.Unmarshal(message, &wsMsg)
+
+	var payload struct {
+		SelectedComponentID string `json:"selectedComponentId"`
+	}
+	json.Unmarshal(wsMsg.Payload, &payload)
+
+	// 使用指针字段进行部分更新（不会覆盖光标位置）
+	id := payload.SelectedComponentID
+	update := &ClientStateUpdate{
+		Client:              c,
+		SelectedComponentID: &id,
+		// CursorX/Y 保持 nil，表示不修改
+	}
+
+	// 选中状态是关键消息，使用阻塞发送确保不丢失
+	c.Room.stateUpdate <- update
+
+	// 重建消息，确保 SenderID 来自服务端已认证的用户信息
+	broadcastMsg := WSMessage{
+		Type:      TypeSelectionChange,
+		SenderID:  c.UserInfo.UserID, // 使用服务端可信的 UserID
+		Payload:   wsMsg.Payload,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	data, _ := json.Marshal(broadcastMsg)
+	c.Room.Broadcast(data, c, true)
 }
 
 // sendError 发送结构化错误消息

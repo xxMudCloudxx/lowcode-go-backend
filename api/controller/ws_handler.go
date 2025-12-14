@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	domainErrors "lowercode-go-server/domain/errors"
+	domainRepo "lowercode-go-server/domain/repository"
 	"lowercode-go-server/internal/ws"
 
 	"github.com/clerk/clerk-sdk-go/v2/jwt"
@@ -17,13 +18,15 @@ import (
 // WSHandler WebSocket 连接处理器
 type WSHandler struct {
 	hub      *ws.Hub
+	userRepo domainRepo.UserRepository
 	upgrader websocket.Upgrader
 }
 
 // NewWSHandler 创建 WSHandler 实例
-func NewWSHandler(hub *ws.Hub, allowedOrigins []string) *WSHandler {
+func NewWSHandler(hub *ws.Hub, userRepo domainRepo.UserRepository, allowedOrigins []string) *WSHandler {
 	return &WSHandler{
-		hub: hub,
+		hub:      hub,
+		userRepo: userRepo,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -104,10 +107,21 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 	}
 
 	// 创建客户端并注册到房间
+	// 从数据库获取用户信息（用户名和头像）
+	userName := claims.Subject // 默认使用用户 ID
+	avatarURL := ""
+	if user, err := h.userRepo.GetByID(claims.Subject); err == nil && user != nil {
+		if user.Name != "" {
+			userName = user.Name
+		}
+		avatarURL = user.AvatarURL
+	}
+
 	userInfo := ws.UserInfo{
-		UserID:   claims.Subject,
-		UserName: claims.Subject, // TODO: 从 Clerk 获取用户名
-		Color:    generateUserColor(claims.Subject),
+		UserID:    claims.Subject,
+		UserName:  userName,
+		AvatarURL: avatarURL,
+		Color:     generateUserColor(claims.Subject),
 	}
 
 	client := ws.NewClient(h.hub, conn, pageID, userInfo)

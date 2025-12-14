@@ -20,12 +20,17 @@ type Room struct {
 	// clients map 只在 run() 内访问，无需锁保护
 	clients map[*Client]bool
 
+	// clientStates 存储每个客户端的短暂状态（光标位置、选中组件）
+	// 在 run() 内串行访问，无需锁保护
+	clientStates map[*Client]*ClientState
+
 	// 事件通道
-	broadcast  chan *RoomBroadcast // 广播消息
-	register   chan *Client        // 加入请求
-	unregister chan *Client        // 退出请求
-	stopChan   chan struct{}       // 停止信号
-	doneChan   chan struct{}       // run() 完全退出信号
+	broadcast   chan *RoomBroadcast     // 广播消息
+	register    chan *Client            // 加入请求
+	unregister  chan *Client            // 退出请求
+	stateUpdate chan *ClientStateUpdate // 客户端状态更新（光标/选中）
+	stopChan    chan struct{}           // 停止信号
+	doneChan    chan struct{}           // run() 完全退出信号
 
 	// 状态标志
 	stopping    bool         // 是否正在停止
@@ -64,9 +69,11 @@ func NewRoom(id string, initialState []byte, pageService PageService, hub *Hub) 
 		CurrentState: initialState,
 		Version:      1,
 		clients:      make(map[*Client]bool),
+		clientStates: make(map[*Client]*ClientState),
 		broadcast:    make(chan *RoomBroadcast, 256),
 		register:     make(chan *Client),
 		unregister:   make(chan *Client),
+		stateUpdate:  make(chan *ClientStateUpdate, 1024), // 高频光标消息需要大缓冲
 		stopChan:     make(chan struct{}),
 		doneChan:     make(chan struct{}),
 		flushTicker:  time.NewTicker(FlushInterval),
@@ -93,10 +100,24 @@ func (r *Room) run() {
 		select {
 		// 处理客户端注册
 		case client := <-r.register:
+			// 踢掉同一用户的旧连接（防止重复计数）
+			for oldClient := range r.clients {
+				if oldClient.UserInfo.UserID == client.UserInfo.UserID {
+					log.Printf("[Room %s] 踢掉用户 [%s] 的旧连接", r.ID, client.UserInfo.UserName)
+					delete(r.clients, oldClient)
+					delete(r.clientStates, oldClient)
+					close(oldClient.send)
+					r.updateClientCount(-1)
+					// 不需要广播 user-leave，因为马上就会 user-join
+				}
+			}
+
 			r.clients[client] = true
+			r.clientStates[client] = &ClientState{} // 初始化空状态
 			client.Room = r
 			r.updateClientCount(1)
 			r.sendSyncToClient(client)
+			r.broadcastUserJoin(client) // 广播新用户加入
 			log.Printf("[Room %s] 用户 [%s] 加入，当前人数: %d",
 				r.ID, client.UserInfo.UserName, len(r.clients))
 
@@ -104,8 +125,10 @@ func (r *Room) run() {
 		case client := <-r.unregister:
 			if _, ok := r.clients[client]; ok {
 				delete(r.clients, client)
+				delete(r.clientStates, client) // 清理状态
 				close(client.send)
 				r.updateClientCount(-1)
+				r.broadcastUserLeave(client) // 广播用户离开，清理死光标
 				log.Printf("[Room %s] 用户 [%s] 离开，剩余人数: %d",
 					r.ID, client.UserInfo.UserName, len(r.clients))
 
@@ -114,6 +137,25 @@ func (r *Room) run() {
 					r.hub.NotifyIdle(r)
 				}
 			}
+
+		// 处理客户端状态更新（增量合并，避免覆盖）
+		case update := <-r.stateUpdate:
+			state, exists := r.clientStates[update.Client]
+			if !exists {
+				state = &ClientState{}
+				r.clientStates[update.Client] = state
+			}
+			// 增量合并：只更新非 nil 的字段
+			if update.CursorX != nil {
+				state.CursorX = *update.CursorX
+			}
+			if update.CursorY != nil {
+				state.CursorY = *update.CursorY
+			}
+			if update.SelectedComponentID != nil {
+				state.SelectedComponentID = *update.SelectedComponentID
+			}
+			// 注意：实时广播已由 client.go 处理，这里只存储快照供新用户同步
 
 		// 处理广播消息
 		case msg := <-r.broadcast:
@@ -131,6 +173,7 @@ func (r *Room) run() {
 						log.Printf("[Room %s] 关键消息阻塞，踢出用户 [%s]",
 							r.ID, client.UserInfo.UserName)
 						delete(r.clients, client)
+						delete(r.clientStates, client)
 						close(client.send)
 					}
 					// 非关键消息直接丢弃
@@ -149,14 +192,20 @@ func (r *Room) run() {
 }
 
 // sendSyncToClient 向新加入的客户端发送全量同步消息
+// 包含其他用户的短暂状态（光标位置、选中组件）
 func (r *Room) sendSyncToClient(client *Client) {
 	snapshot, version := r.GetSnapshot()
 
-	// 收集房间内其他用户信息
+	// 收集房间内其他用户信息（包含短暂状态）
 	users := make([]UserInfo, 0, len(r.clients))
 	for c := range r.clients {
 		if c != client {
-			users = append(users, c.UserInfo)
+			userInfo := c.UserInfo
+			// 附加用户的短暂状态
+			if state, ok := r.clientStates[c]; ok {
+				userInfo.State = state
+			}
+			users = append(users, userInfo)
 		}
 	}
 
@@ -177,8 +226,50 @@ func (r *Room) sendSyncToClient(client *Client) {
 	data, _ := json.Marshal(msg)
 	client.send <- data
 
-	log.Printf("[Room %s] 已发送 Sync 给 [%s], 版本: %d",
-		r.ID, client.UserInfo.UserName, version)
+	log.Printf("[Room %s] 已发送 Sync 给 [%s], 版本: %d, 其他用户: %d",
+		r.ID, client.UserInfo.UserName, version, len(users))
+}
+
+// broadcastUserJoin 广播用户加入消息（发给除新用户外的所有人）
+func (r *Room) broadcastUserJoin(client *Client) {
+	payload, _ := json.Marshal(client.UserInfo)
+	msg := WSMessage{
+		Type:      TypeUserJoin,
+		SenderID:  client.UserInfo.UserID,
+		Payload:   payload,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	data, _ := json.Marshal(msg)
+
+	for c := range r.clients {
+		if c != client {
+			select {
+			case c.send <- data:
+			default:
+				// 非关键消息，静默跳过
+			}
+		}
+	}
+}
+
+// broadcastUserLeave 广播用户离开消息（清理死光标）
+func (r *Room) broadcastUserLeave(client *Client) {
+	payload, _ := json.Marshal(client.UserInfo)
+	msg := WSMessage{
+		Type:      TypeUserLeave,
+		SenderID:  client.UserInfo.UserID,
+		Payload:   payload,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	data, _ := json.Marshal(msg)
+
+	for c := range r.clients {
+		select {
+		case c.send <- data:
+		default:
+			// 非关键消息，静默跳过
+		}
+	}
 }
 
 // --- 对外接口 ---

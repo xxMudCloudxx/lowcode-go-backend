@@ -7,8 +7,9 @@ type MessageType string
 
 const (
 	// 协同消息类型
-	TypeOpPatch    MessageType = "op-patch"    // 增量编辑补丁
-	TypeCursorMove MessageType = "cursor-move" // 光标位置同步
+	TypeOpPatch         MessageType = "op-patch"         // 增量编辑补丁
+	TypeCursorMove      MessageType = "cursor-move"      // 光标位置同步
+	TypeSelectionChange MessageType = "selection-change" // 组件选中变更
 
 	// 系统消息类型
 	TypeUserJoin  MessageType = "user-join"  // 用户加入房间
@@ -26,6 +27,23 @@ type WSMessage struct {
 	Timestamp int64           `json:"ts"`       // 时间戳
 }
 
+// ClientState 客户端短暂状态（感知数据 / Awareness）
+// 用于在新用户加入时同步其他用户的光标位置和选中组件
+type ClientState struct {
+	CursorX             float64 `json:"cursorX,omitempty"`
+	CursorY             float64 `json:"cursorY,omitempty"`
+	SelectedComponentID string  `json:"selectedComponentId,omitempty"`
+}
+
+// ClientStateUpdate 客户端状态更新结构（支持部分更新）
+// 使用指针字段区分"未修改"(nil) 和"设为零值"(非nil但值为零)
+type ClientStateUpdate struct {
+	Client              *Client
+	CursorX             *float64
+	CursorY             *float64
+	SelectedComponentID *string
+}
+
 // SyncPayload 全量同步消息的 payload 结构
 type SyncPayload struct {
 	Schema  json.RawMessage `json:"schema"`
@@ -35,9 +53,11 @@ type SyncPayload struct {
 
 // UserInfo 用户基础信息
 type UserInfo struct {
-	UserID   string `json:"userId"`
-	UserName string `json:"userName"`
-	Color    string `json:"color,omitempty"`
+	UserID    string       `json:"userId"`
+	UserName  string       `json:"userName"`
+	AvatarURL string       `json:"avatarUrl,omitempty"`
+	Color     string       `json:"color,omitempty"`
+	State     *ClientState `json:"state,omitempty"` // 短暂状态（光标、选中组件）
 }
 
 // --- 错误码定义 ---

@@ -44,7 +44,7 @@ func main() {
 
 	// 依赖注入 - Controller 层
 	pageController := controller.NewPageController(pageUseCase)
-	wsHandler := controller.NewWSHandler(hub, []string{
+	wsHandler := controller.NewWSHandler(hub, userRepo, []string{
 		"https://xxmudcloudxx.github.io",
 	})
 	webhookController := controller.NewWebhookController(userRepo, env.WebhookSecret)
