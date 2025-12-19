@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	domainErrors "lowercode-go-server/domain/errors"
 	domainRepo "lowercode-go-server/domain/repository"
@@ -72,7 +73,8 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 
 	// 验证 Clerk JWT
 	claims, err := jwt.Verify(c.Request.Context(), &jwt.VerifyParams{
-		Token: token,
+		Token:  token,
+		Leeway: time.Minute, // 允许1分钟时钟偏差
 	})
 	if err != nil {
 		log.Printf("[WS] Token 验证失败: %v", err)

@@ -16,6 +16,7 @@ type Room struct {
 	ID           string
 	CurrentState []byte
 	Version      int64
+	CanvasSize   *CanvasSize
 
 	// clients map 只在 run() 内访问，无需锁保护
 	clients map[*Client]bool
@@ -38,7 +39,8 @@ type Room struct {
 	countMu     sync.RWMutex // 保护 clientCount 和 stopping
 
 	// 状态锁，仅用于保护 CurrentState 和 Version 的并发读写
-	stateMu sync.RWMutex
+	stateMu  sync.RWMutex
+	canvasMu sync.RWMutex
 
 	// 刷盘相关
 	lastPersistedVersion int64
@@ -79,6 +81,11 @@ func NewRoom(id string, initialState []byte, pageService PageService, hub *Hub) 
 		flushTicker:  time.NewTicker(FlushInterval),
 		pageService:  pageService,
 		hub:          hub,
+		CanvasSize: &CanvasSize{
+			Width:  1024,
+			Height: "auto",
+			Mode:   "tablet",
+		},
 	}
 
 	go r.run()
@@ -210,9 +217,10 @@ func (r *Room) sendSyncToClient(client *Client) {
 	}
 
 	syncPayload := SyncPayload{
-		Schema:  snapshot,
-		Version: version,
-		Users:   users,
+		Schema:     snapshot,
+		Version:    version,
+		Users:      users,
+		CanvasSize: r.GetCanvasSize(),
 	}
 
 	payload, _ := json.Marshal(syncPayload)
@@ -384,6 +392,20 @@ func (r *Room) updateClientCount(delta int) {
 	r.countMu.Lock()
 	r.clientCount += delta
 	r.countMu.Unlock()
+}
+
+// SetCanvasSize 设置画布大小
+func (r *Room) SetCanvasSize(size *CanvasSize) {
+	r.canvasMu.Lock()
+	r.CanvasSize = size
+	r.canvasMu.Unlock()
+}
+
+// GetCanvasSize 获取画布大小
+func (r *Room) GetCanvasSize() *CanvasSize {
+	r.canvasMu.RLock()
+	defer r.canvasMu.RUnlock()
+	return r.CanvasSize
 }
 
 // --- 需要锁保护的状态操作 ---

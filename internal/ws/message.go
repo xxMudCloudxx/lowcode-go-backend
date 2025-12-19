@@ -12,11 +12,12 @@ const (
 	TypeSelectionChange MessageType = "selection-change" // 组件选中变更
 
 	// 系统消息类型
-	TypeUserJoin  MessageType = "user-join"  // 用户加入房间
-	TypeUserLeave MessageType = "user-leave" // 用户离开房间
-	TypeSync      MessageType = "sync"       // 全量同步
-	TypeAck       MessageType = "ack"        // 确认消息
-	TypeError     MessageType = "error"      // 错误消息
+	TypeUserJoin   MessageType = "user-join"   // 用户加入房间
+	TypeUserLeave  MessageType = "user-leave"  // 用户离开房间
+	TypeSync       MessageType = "sync"        // 全量同步
+	TypeAck        MessageType = "ack"         // 确认消息
+	TypeError      MessageType = "error"       // 错误消息
+	TypeCanvasSize MessageType = "canvas-size" // 画布大小同步
 )
 
 // WSMessage 统一的 WebSocket 消息结构
@@ -46,9 +47,10 @@ type ClientStateUpdate struct {
 
 // SyncPayload 全量同步消息的 payload 结构
 type SyncPayload struct {
-	Schema  json.RawMessage `json:"schema"`
-	Version int64           `json:"version"`
-	Users   []UserInfo      `json:"users"`
+	Schema     json.RawMessage `json:"schema"`
+	Version    int64           `json:"version"`
+	Users      []UserInfo      `json:"users"`
+	CanvasSize *CanvasSize     `json:"canvasSize,omitempty"`
 }
 
 // UserInfo 用户基础信息
@@ -58,6 +60,13 @@ type UserInfo struct {
 	AvatarURL string       `json:"avatarUrl,omitempty"`
 	Color     string       `json:"color,omitempty"`
 	State     *ClientState `json:"state,omitempty"` // 短暂状态（光标、选中组件）
+}
+
+// CanvasSize 画布大小
+type CanvasSize struct {
+	Width  interface{} `json:"width"`  // number | "100%"
+	Height interface{} `json:"height"` // number | "auto"
+	Mode   string      `json:"mode"`   // "mobile" | "tablet" | "desktop"
 }
 
 // --- 错误码定义 ---

@@ -113,6 +113,15 @@ func (c *Client) ReadPump() {
 			c.handleCursorMove(message)
 		case TypeSelectionChange:
 			c.handleSelectionChange(message)
+		case TypeCanvasSize:
+			var canvasSize CanvasSize
+			if err := json.Unmarshal(message, &canvasSize); err != nil {
+				log.Printf("[Client] 无效的画布大小消息: %v, 来自: %v", err, c.UserInfo.UserID)
+				break
+			}
+			c.Room.SetCanvasSize(&canvasSize)
+
+			c.Room.Broadcast(message, c, false)
 		}
 	}
 }

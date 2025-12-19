@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/clerk/clerk-sdk-go/v2/jwt"
 	"github.com/gin-gonic/gin"
@@ -28,7 +29,8 @@ func ClerkAuth() gin.HandlerFunc {
 		// 2. 验证 Token (核心)
 		// Clerk SDK 会自动拉取公钥并验证签名、过期时间
 		claims, err := jwt.Verify(c.Request.Context(), &jwt.VerifyParams{
-			Token: token,
+			Token:  token,
+			Leeway: time.Minute, // 允许1分钟时钟偏差
 		})
 		if err != nil {
 			// 生产环境不暴露错误详情
