@@ -10,14 +10,15 @@ const (
 	TypeOpPatch         MessageType = "op-patch"         // 增量编辑补丁
 	TypeCursorMove      MessageType = "cursor-move"      // 光标位置同步
 	TypeSelectionChange MessageType = "selection-change" // 组件选中变更
+	TypeRequestSync     MessageType = "request-sync"     // 客户端请求全量同步
+	TypeCanvasSize      MessageType = "canvas-size"      // 画布大小同步
 
 	// 系统消息类型
-	TypeUserJoin   MessageType = "user-join"   // 用户加入房间
-	TypeUserLeave  MessageType = "user-leave"  // 用户离开房间
-	TypeSync       MessageType = "sync"        // 全量同步
-	TypeAck        MessageType = "ack"         // 确认消息
-	TypeError      MessageType = "error"       // 错误消息
-	TypeCanvasSize MessageType = "canvas-size" // 画布大小同步
+	TypeUserJoin  MessageType = "user-join"  // 用户加入房间
+	TypeUserLeave MessageType = "user-leave" // 用户离开房间
+	TypeSync      MessageType = "sync"       // 全量同步
+	TypeAck       MessageType = "ack"        // 确认消息
+	TypeError     MessageType = "error"      // 错误消息
 )
 
 // WSMessage 统一的 WebSocket 消息结构

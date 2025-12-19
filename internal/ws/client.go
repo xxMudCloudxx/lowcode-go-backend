@@ -122,6 +122,8 @@ func (c *Client) ReadPump() {
 			c.Room.SetCanvasSize(&canvasSize)
 
 			c.Room.Broadcast(message, c, false)
+		case TypeRequestSync:
+			c.Room.syncRequest <- c
 		}
 	}
 }

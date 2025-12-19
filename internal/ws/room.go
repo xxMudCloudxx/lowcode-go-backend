@@ -29,6 +29,7 @@ type Room struct {
 	broadcast   chan *RoomBroadcast     // 广播消息
 	register    chan *Client            // 加入请求
 	unregister  chan *Client            // 退出请求
+	syncRequest chan *Client            // 同步请求
 	stateUpdate chan *ClientStateUpdate // 客户端状态更新（光标/选中）
 	stopChan    chan struct{}           // 停止信号
 	doneChan    chan struct{}           // run() 完全退出信号
@@ -75,6 +76,7 @@ func NewRoom(id string, initialState []byte, pageService PageService, hub *Hub) 
 		broadcast:    make(chan *RoomBroadcast, 256),
 		register:     make(chan *Client),
 		unregister:   make(chan *Client),
+		syncRequest:  make(chan *Client),
 		stateUpdate:  make(chan *ClientStateUpdate, 1024), // 高频光标消息需要大缓冲
 		stopChan:     make(chan struct{}),
 		doneChan:     make(chan struct{}),
@@ -163,6 +165,12 @@ func (r *Room) run() {
 				state.SelectedComponentID = *update.SelectedComponentID
 			}
 			// 注意：实时广播已由 client.go 处理，这里只存储快照供新用户同步
+
+		// 处理同步请求
+		case client := <-r.syncRequest:
+			// 这个同步请求处理是专门给request-sync消息的
+			r.sendSyncToClient(client)
+			log.Printf("[Room %s] 已响应用户 [%s] 的同步请求", r.ID, client.UserInfo.UserName)
 
 		// 处理广播消息
 		case msg := <-r.broadcast:
